@@ -1,0 +1,33 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+
+# Output / generated files
+data/generated_tests.xlsx
+data/sample_requirements/
+data/faiss_index.faiss
+data/metadata.json
+data/playwright_scripts.zip
+
+# Runtime logs
+logs/
+
+# Generated Playwright scripts
+scripts/
+
+# Node
+node_modules/

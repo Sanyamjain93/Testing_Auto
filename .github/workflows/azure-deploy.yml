@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub Actions – Build & Deploy to Azure App Service (Container)
+#
+# Required GitHub repository secrets:
+#   ACR_LOGIN_SERVER   – e.g. myregistry.azurecr.io
+#   ACR_USERNAME       – ACR admin username  (or service-principal appId)
+#   ACR_PASSWORD       – ACR admin password  (or service-principal password)
+#   AZURE_CREDENTIALS  – JSON output of:
+#                          az ad sp create-for-rbac \
+#                            --name "gh-actions-deploy" \
+#                            --role contributor \
+#                            --scopes /subscriptions/<SUB_ID>/resourceGroups/<RG> \
+#                            --sdk-auth
+#   AZURE_WEBAPP_NAME  – Name of the Azure App Service web app
+#
+# Required GitHub repository variables  (Settings → Variables):
+#   AZURE_RESOURCE_GROUP  – Resource group that contains the App Service
+#
+# App-level environment variables (API keys, etc.) must be set directly in
+# Azure App Service → Configuration → Application Settings, NOT here.
+# Keys to add there:
+#   GOOGLE_API_KEY, HF_API_TOKEN, GROQ_API_KEY
+#   (and any other variables read by config/config.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Build and Deploy to Azure
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:          # allows manual trigger from the GitHub UI
+
+env:
+  IMAGE_NAME: test-automation
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Log in to Azure Container Registry ────────────────────────────────
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # ── 3. Build & push Docker image ─────────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          # Tag with both the commit SHA (immutable) and "latest" (rolling)
+          tags: |
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=registry,ref=${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+
+      # ── 4. Log in to Azure ───────────────────────────────────────────────────
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── 5. Deploy to Azure App Service ───────────────────────────────────────
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      # ── 6. Azure logout ──────────────────────────────────────────────────────
+      - name: Azure logout
+        if: always()
+        run: az logout

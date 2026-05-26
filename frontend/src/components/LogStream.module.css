@@ -1,0 +1,78 @@
+.terminal {
+  background: #0d0f18;
+  border-radius: var(--radius);
+  padding: 12px 8px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.runningIndicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  padding: 4px 8px;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: pulse-ring 1s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+.line {
+  display: flex;
+  gap: 12px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  align-items: baseline;
+}
+
+.lineNum {
+  color: var(--text-dim);
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.5;
+}
+
+.lineText {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Color variants */
+.default .lineText { color: #c9d1d9; }
+.info .lineText { color: #79c0ff; }
+.success .lineText { color: var(--success); }
+.warning .lineText { color: var(--warning); }
+.error .lineText { color: var(--error); }
+
+.error {
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+}
+.success {
+  background: color-mix(in srgb, var(--success) 6%, transparent);
+}
