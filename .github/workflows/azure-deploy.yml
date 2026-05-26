@@ -82,4 +82,5 @@ jobs:
       # ── 6. Azure logout ──────────────────────────────────────────────────────
       - name: Azure logout
         if: always()
+        continue-on-error: true
         run: az logout
