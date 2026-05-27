@@ -165,6 +165,20 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict:
     return {"uploaded": saved}
 
 
+@app.post("/reset")
+def reset_state() -> dict:
+    """Reset backend pipeline state so the frontend starts clean after a user-triggered reset."""
+    if _state["running"]:
+        raise HTTPException(status_code=409, detail="Pipeline is running. Wait for it to finish before resetting.")
+    _state.update({"running": False, "done": False, "error": None})
+    while not _log_q.empty():
+        _log_q.get_nowait()
+    while not _progress_q.empty():
+        _progress_q.get_nowait()
+    logger.info("[RESET] State cleared by user.")
+    return {"status": "reset"}
+
+
 @app.post("/run")
 def start_pipeline() -> dict:
     if _state["running"]:

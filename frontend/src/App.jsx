@@ -158,7 +158,7 @@ export default function App() {
     openStream()
   }, [files, openStream])
 
-  const handleReset = () => {
+  const handleReset = async () => {
     if (esRef.current) esRef.current.close()
     setFiles([])
     setPhase(PHASE.IDLE)
@@ -168,6 +168,8 @@ export default function App() {
     setUploadedNames([])
     setScriptStatus('')
     setScripts([])
+    // Tell backend to clear its done-state so old results don't reload on remount
+    try { await fetch('/reset', { method: 'POST' }) } catch (_) {}
     setScriptsLoading(false)
     setScriptsError('')
     setSelectedScriptName('')
@@ -399,8 +401,8 @@ export default function App() {
                   <ProgressStatus
                     progress={progress}
                     errorMsg={errorMsg}
-                    showLogs={false}
-                    onToggleLogs={() => {}}
+                    showLogs={activeTab === 'logs'}
+                    onToggleLogs={() => setActiveTab('logs')}
                   />
                 ) : (
                   <div className={styles.emptyState}>

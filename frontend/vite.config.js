@@ -16,6 +16,7 @@ export default defineConfig({
       '/generate-scripts': 'http://localhost:8000',
       '/download-scripts': 'http://localhost:8000',
       '/scripts': 'http://localhost:8000',
+      '/reset': 'http://localhost:8000',
       '/set-llm': 'http://localhost:8000',
     },
   },
