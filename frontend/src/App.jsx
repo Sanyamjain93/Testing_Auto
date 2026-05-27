@@ -213,15 +213,18 @@ export default function App() {
     setScriptStatus('generating')
     setScriptsError('')
     setActiveTab('scripts')
+    setProgress({ currentStage: 'generating_scripts', currentStatus: 'running' })
     try {
       const res = await fetch('/generate-scripts', { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Script generation failed')
       setLogs(prev => [...prev, `[SCRIPT] ${data.count} Playwright script(s) generated ✅`])
+      setProgress({ currentStage: 'generating_scripts', currentStatus: 'done' })
       setScriptStatus('done')
       await loadScripts()
     } catch (e) {
       setLogs(prev => [...prev, `[SCRIPT ERROR] ${e.message}`])
+      setProgress({ currentStage: 'generating_scripts', currentStatus: 'error' })
       setScriptStatus('error')
       setScriptsError(e.message)
     }

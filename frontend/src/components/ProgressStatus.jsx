@@ -17,11 +17,13 @@ const STATUS_ICONS = {
 
 export default function ProgressStatus({ progress, errorMsg, showLogs, onToggleLogs }) {
   const getStageStatus = (stageId) => {
+    if (!progress.currentStage) return 'pending'
     const currentIdx = STAGES.findIndex(s => s.id === progress.currentStage)
     const stageIdx = STAGES.findIndex(s => s.id === stageId)
 
     if (stageIdx < currentIdx) return 'done'
     if (stageIdx === currentIdx) return progress.currentStatus || 'running'
+    // If current stage is done and this is the very next stage, keep it pending
     return 'pending'
   }
 
