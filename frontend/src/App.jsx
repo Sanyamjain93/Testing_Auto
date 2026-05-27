@@ -33,7 +33,7 @@ export default function App() {
   const [scriptStatus, setScriptStatus] = useState('') // '' | 'generating' | 'done' | 'error'
   const [selectedLlm, setSelectedLlm] = useState(DEFAULT_LLM)
   const [progress, setProgress] = useState({ currentStage: null, currentStatus: null })
-  const [showLogs, setShowLogs] = useState(false)
+  const [activeTab, setActiveTab] = useState('progress') // 'progress' | 'results' | 'scripts' | 'logs'
   const esRef = useRef(null)
 
   // Poll status on mount (resume if pipeline was already running)
@@ -98,7 +98,7 @@ export default function App() {
     setResults([])
     setErrorMsg('')
     setProgress({ currentStage: null, currentStatus: null })
-    setShowLogs(false)
+    setActiveTab('progress')
 
     // ── Upload ──────────────────────────────────────────────────────────────
     setPhase(PHASE.UPLOADING)
@@ -144,7 +144,7 @@ export default function App() {
     setUploadedNames([])
     setScriptStatus('')
     setProgress({ currentStage: null, currentStatus: null })
-    setShowLogs(false)
+    setActiveTab('progress')
   }
 
   const handleRefreshRag = useCallback(async () => {
@@ -204,165 +204,203 @@ export default function App() {
     <div className={styles.layout}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className={styles.header}>
-        <div className={styles.headerInner}>
-          <div className={styles.logo}>
-            <span className={styles.logoIcon}>⚡</span>
-            <div>
-              <h1 className={styles.logoTitle}>AI Test Case Generator</h1>
-              <p className={styles.logoSub}>Powered by Mistral LLM · RAG Pipeline</p>
-            </div>
+        <div className={styles.headerContent}>
+          <div className={styles.headerBrand}>
+            <div className={styles.infosysLabel}>INFOSYS</div>
+            <h1 className={styles.headerTitle}>AI Test Automation Platform</h1>
+            <p className={styles.headerSubtitle}>Powered by AI + RAG</p>
           </div>
           <StatusBadge phase={phase} />
         </div>
       </header>
 
       <main className={styles.main}>
-        {/* ── Left column ──────────────────────────────────────────────────── */}
-        <section className={styles.leftCol}>
-          <Card title="1 · Upload Requirements">
+        {/* ── Left Panel (Controls) ──────────────────────────────────────── */}
+        <aside className={styles.leftPanel}>
+          <div className={styles.panelSection}>
+            <h3 className={styles.sectionTitle}>📁 Upload Files</h3>
             <UploadSection
               files={files}
               setFiles={setFiles}
               disabled={isRunning}
             />
-          </Card>
+          </div>
 
-          <Card title="2 · Generate Test Cases">
-            <div className={styles.actionArea}>
-              {uploadedNames.length > 0 && (
-                <p className={styles.uploadedHint}>
-                  ✓ {uploadedNames.length} file{uploadedNames.length > 1 ? 's' : ''} uploaded
-                </p>
-              )}
-
-              <div className={styles.llmRow}>
-                <label className={styles.llmLabel} htmlFor="llm-select">Model</label>
-                <select
-                  id="llm-select"
-                  className={styles.llmSelect}
-                  value={selectedLlm.model}
-                  onChange={handleLlmChange}
-                  disabled={isRunning}
-                >
-                  {LLM_OPTIONS.map(o => (
-                    <option key={o.model} value={o.model}>{o.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <button
-                className={styles.runBtn}
-                onClick={handleUploadAndRun}
-                disabled={!canRun}
-              >
-                {phase === PHASE.UPLOADING ? (
-                  <><Spinner /> Uploading…</>
-                ) : phase === PHASE.RUNNING ? (
-                  <><Spinner /> Running pipeline…</>
-                ) : (
-                  '▶ Generate Test Cases'
-                )}
-              </button>
-
-              <button
-                className={styles.refreshRagBtn}
-                onClick={handleRefreshRag}
-                disabled={isRunning || ragStatus === 'refreshing'}
-              >
-                {ragStatus === 'refreshing' ? <><Spinner /> Clearing RAG index…</> :
-                 ragStatus === 'done'       ? '✅ RAG index cleared — will rebuild on next Run' :
-                 ragStatus === 'error'      ? '❌ Failed to clear RAG index' :
-                 '🔄 Refresh RAG'}
-              </button>
-
-              {(phase === PHASE.DONE || phase === PHASE.ERROR) && (
-                <button className={styles.resetBtn} onClick={handleReset}>
-                  ↺ Reset
-                </button>
-              )}
-            </div>
-
-            {phase === PHASE.ERROR && (
-              <div className={styles.errorBox}>
-                <strong>Error:</strong> {errorMsg}
-              </div>
+          <div className={styles.panelSection}>
+            <h3 className={styles.sectionTitle}>⚙️ Configuration</h3>
+            {uploadedNames.length > 0 && (
+              <p className={styles.uploadedHint}>
+                ✓ {uploadedNames.length} file{uploadedNames.length > 1 ? 's' : ''} uploaded
+              </p>
             )}
-          </Card>
+            <div className={styles.configGroup}>
+              <label className={styles.configLabel} htmlFor="llm-select">AI Model</label>
+              <select
+                id="llm-select"
+                className={styles.configSelect}
+                value={selectedLlm.model}
+                onChange={handleLlmChange}
+                disabled={isRunning}
+              >
+                {LLM_OPTIONS.map(o => (
+                  <option key={o.model} value={o.model}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-          {phase === PHASE.DONE && results.length > 0 && (
-            <Card title="3 · Download Results">
-              <div className={styles.downloadArea}>
-                <p className={styles.downloadHint}>
-                  {results.length} test step{results.length !== 1 ? 's' : ''} generated
-                </p>
-                <button className={styles.downloadBtn} onClick={handleDownload}>
+          <div className={styles.panelSection}>
+            <h3 className={styles.sectionTitle}>🚀 Actions</h3>
+            <button
+              className={styles.primaryBtn}
+              onClick={handleUploadAndRun}
+              disabled={!canRun}
+            >
+              {phase === PHASE.UPLOADING ? (
+                <><Spinner /> Uploading…</>
+              ) : phase === PHASE.RUNNING ? (
+                <><Spinner /> Running…</>
+              ) : (
+                '▶ Generate Test Cases'
+              )}
+            </button>
+
+            <button
+              className={styles.secondaryBtn}
+              onClick={handleRefreshRag}
+              disabled={isRunning || ragStatus === 'refreshing'}
+              title="Clear FAISS index and rebuild on next run"
+            >
+              {ragStatus === 'refreshing' ? <><Spinner /> Clearing…</> :
+               ragStatus === 'done'       ? '✅ Cleared' :
+               ragStatus === 'error'      ? '❌ Failed' :
+               '🔄 Refresh RAG'}
+            </button>
+
+            {(phase === PHASE.DONE || phase === PHASE.ERROR) && (
+              <button className={styles.secondaryBtn} onClick={handleReset}>
+                ↺ Reset
+              </button>
+            )}
+
+            {phase === PHASE.DONE && results.length > 0 && (
+              <>
+                <button className={styles.actionBtn} onClick={handleDownload}>
                   ⬇ Download Excel
                 </button>
-              </div>
-            </Card>
-          )}
-
-          {phase === PHASE.DONE && results.length > 0 && (
-            <Card title="4 · Playwright Scripts">
-              <div className={styles.downloadArea}>
-                <p className={styles.downloadHint}>
-                  Generate Playwright (JavaScript) automation scripts for all test cases.
-                </p>
                 <button
-                  className={styles.generateScriptsBtn}
+                  className={styles.actionBtn}
                   onClick={handleGenerateScripts}
                   disabled={scriptStatus === 'generating'}
                 >
                   {scriptStatus === 'generating'
-                    ? <><Spinner /> Generating scripts…</>
-                    : '⚡ Generate Playwright Scripts'}
+                    ? <><Spinner /> Generating…</>
+                    : '⚡ Generate Scripts'}
                 </button>
                 {scriptStatus === 'done' && (
-                  <button className={styles.downloadBtn} onClick={handleDownloadScripts}>
-                    ⬇ Download Scripts (.zip)
+                  <button className={styles.actionBtn} onClick={handleDownloadScripts}>
+                    ⬇ Download Scripts
                   </button>
                 )}
-                {scriptStatus === 'error' && (
-                  <p className={styles.downloadHint} style={{ color: 'var(--error)' }}>
-                    ❌ Script generation failed. Check logs for details.
-                  </p>
-                )}
+              </>
+            )}
+          </div>
+
+          {phase === PHASE.ERROR && (
+            <div className={styles.panelSection}>
+              <div className={styles.errorAlert}>
+                <div className={styles.errorTitle}>❌ Error</div>
+                <p className={styles.errorMsg}>{errorMsg}</p>
               </div>
-            </Card>
-          )}
-        </section>
-
-        {/* ── Right column ─────────────────────────────────────────────────── */}
-        <section className={styles.rightCol}>
-          {(logs.length > 0 || isRunning) && (
-            <Card title="Pipeline Logs" accent>
-              <ProgressStatus
-                progress={progress}
-                errorMsg={errorMsg}
-                showLogs={showLogs}
-                onToggleLogs={() => setShowLogs(!showLogs)}
-              />
-              {showLogs && (
-                <div style={{ marginTop: '16px' }}>
-                  <LogStream logs={logs} running={isRunning} />
-                </div>
-              )}
-            </Card>
-          )}
-
-          {phase === PHASE.DONE && results.length > 0 && (
-            <Card title={`Results — ${results.length} rows`}>
-              <ResultsTable rows={results} />
-            </Card>
-          )}
-
-          {phase === PHASE.IDLE && logs.length === 0 && (
-            <div className={styles.emptyState}>
-              <span className={styles.emptyIcon}>🧪</span>
-              <p>Upload requirement documents and click Generate to start.</p>
-              <p className={styles.emptyFormats}>Supported formats: PDF · DOCX · TXT · MD</p>
             </div>
           )}
+        </aside>
+
+        {/* ── Right Panel (Output - Tabbed) ──────────────────────────────── */}
+        <section className={styles.rightPanel}>
+          {/* Tab Navigation */}
+          <div className={styles.tabBar}>
+            <button
+              className={`${styles.tab} ${activeTab === 'progress' ? styles.tabActive : ''}`}
+              onClick={() => setActiveTab('progress')}
+            >
+              📊 Progress
+            </button>
+            {results.length > 0 && (
+              <button
+                className={`${styles.tab} ${activeTab === 'results' ? styles.tabActive : ''}`}
+                onClick={() => setActiveTab('results')}
+              >
+                ✅ Test Cases ({results.length})
+              </button>
+            )}
+            {scriptStatus === 'done' && (
+              <button
+                className={`${styles.tab} ${activeTab === 'scripts' ? styles.tabActive : ''}`}
+                onClick={() => setActiveTab('scripts')}
+              >
+                ⚡ Scripts
+              </button>
+            )}
+            {logs.length > 0 && (
+              <button
+                className={`${styles.tab} ${activeTab === 'logs' ? styles.tabActive : ''}`}
+                onClick={() => setActiveTab('logs')}
+              >
+                📜 Logs
+              </button>
+            )}
+          </div>
+
+          {/* Tab Content */}
+          <div className={styles.tabContent}>
+            {/* Progress Tab */}
+            {activeTab === 'progress' && (
+              <div className={styles.tabPane}>
+                {(logs.length > 0 || isRunning) ? (
+                  <ProgressStatus
+                    progress={progress}
+                    errorMsg={errorMsg}
+                    showLogs={false}
+                    onToggleLogs={() => {}}
+                  />
+                ) : (
+                  <div className={styles.emptyState}>
+                    <span className={styles.emptyIcon}>🧪</span>
+                    <p>Upload documents and click "Generate Test Cases" to start the pipeline.</p>
+                    <p className={styles.emptyHint}>Supported: PDF, DOCX, TXT, MD</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Results Tab */}
+            {activeTab === 'results' && results.length > 0 && (
+              <div className={styles.tabPane}>
+                <ResultsTable rows={results} />
+              </div>
+            )}
+
+            {/* Scripts Tab */}
+            {activeTab === 'scripts' && scriptStatus === 'done' && (
+              <div className={styles.tabPane}>
+                <div className={styles.scriptInfo}>
+                  <div className={styles.scriptIcon}>⚡</div>
+                  <p>Playwright scripts have been generated successfully.</p>
+                  <button className={styles.primaryBtn} onClick={handleDownloadScripts}>
+                    ⬇ Download Scripts (.zip)
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Logs Tab */}
+            {activeTab === 'logs' && logs.length > 0 && (
+              <div className={styles.tabPane}>
+                <LogStream logs={logs} running={isRunning} />
+              </div>
+            )}
+          </div>
         </section>
       </main>
     </div>
