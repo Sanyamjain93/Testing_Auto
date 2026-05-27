@@ -1,0 +1,60 @@
+.summary {
+  padding: 0 0 20px 0;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: linear-gradient(135deg, #f8fafb 0%, #f0f4f8 100%);
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.metric:hover {
+  border-color: #007CC3;
+  box-shadow: 0 4px 12px rgba(0, 124, 195, 0.1);
+  transform: translateY(-2px);
+}
+
+.metricValue {
+  font-size: 28px;
+  font-weight: 700;
+  color: #007CC3;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.metricValue.success {
+  color: #10b981;
+  font-size: 32px;
+}
+
+.metricValue.pending {
+  color: #9ca3af;
+  font-size: 24px;
+}
+
+.metricLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+@media (max-width: 768px) {
+  .metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

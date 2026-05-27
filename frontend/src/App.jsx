@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import UploadSection from './components/UploadSection'
 import ProgressStatus from './components/ProgressStatus'
+import TestSummary from './components/TestSummary'
 import LogStream from './components/LogStream'
 import ResultsTable from './components/ResultsTable'
 import styles from './App.module.css'
@@ -377,6 +378,7 @@ export default function App() {
             {/* Results Tab */}
             {activeTab === 'results' && results.length > 0 && (
               <div className={styles.tabPane}>
+                <TestSummary rows={results} scriptStatus={scriptStatus} />
                 <ResultsTable rows={results} />
               </div>
             )}
