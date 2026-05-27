@@ -1,0 +1,140 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: var(--surface1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.statusGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.statusItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface2);
+  transition: all 0.2s ease;
+}
+
+.statusItem.pending {
+  opacity: 0.5;
+}
+
+.statusItem.running {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: #3b82f6;
+}
+
+.statusItem.done {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: #22c55e;
+}
+
+.statusItem.error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: #ef4444;
+}
+
+.icon {
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.spinner {
+  display: inline-block;
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.label {
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.statusItem.running .label {
+  color: var(--text);
+}
+
+.statusItem.done .label {
+  color: #22c55e;
+}
+
+.errorBox {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid #ef4444;
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.errorIcon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.errorText {
+  font-size: 13px;
+  color: #ef4444;
+  line-height: 1.4;
+}
+
+.logsToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  align-self: flex-start;
+}
+
+.logsToggle:hover {
+  color: var(--text);
+  background: var(--surface3);
+  border-color: var(--accent);
+}
+
+.toggleIcon {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+@media (max-width: 768px) {
+  .statusGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

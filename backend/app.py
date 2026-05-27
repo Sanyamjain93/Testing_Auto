@@ -65,6 +65,7 @@ app.add_middleware(
 # ── shared state (single-pipeline assumption) ─────────────────────────────────
 _state: dict = {"running": False, "done": False, "error": None}
 _log_q: queue.Queue = queue.Queue()
+_progress_q: queue.Queue = queue.Queue()  # for structured progress events
 _ALLOWED_EXT = {".pdf", ".docx", ".txt", ".md"}
 
 # ── LLM selection state ────────────────────────────────────────────────────────
@@ -77,6 +78,11 @@ class LLMSelection(BaseModel):
 
 
 # ── print() capture for SSE stream ───────────────────────────────────────────
+def emit_progress(stage: str, status: str) -> None:
+    """Emit a structured progress event (visible to frontend)."""
+    _progress_q.put({"stage": stage, "status": status})
+
+
 class _QueueWriter(io.TextIOBase):
     """Redirect print() output into the SSE log queue (frontend-visible)."""
 
@@ -95,7 +101,7 @@ def _pipeline_thread() -> None:
     try:
         with contextlib.redirect_stdout(writer):
             from pipeline import run  # noqa: PLC0415 – late import intentional
-            run(provider=provider, model=model)
+            run(provider=provider, model=model, emit_progress=emit_progress)
         _state.update({"running": False, "done": True, "error": None})
     except Exception as exc:  # noqa: BLE001
         logger.error("Pipeline failed", exc_info=True)
@@ -168,6 +174,8 @@ def start_pipeline() -> dict:
     # Drain stale log messages from a previous run
     while not _log_q.empty():
         _log_q.get_nowait()
+    while not _progress_q.empty():
+        _progress_q.get_nowait()
 
     thread = threading.Thread(target=_pipeline_thread, daemon=True)
     thread.start()
@@ -180,6 +188,13 @@ async def stream_logs() -> StreamingResponse:
 
     async def _generate() -> AsyncGenerator[str, None]:
         while True:
+            try:
+                # Check for progress events first
+                prog = _progress_q.get_nowait()
+                yield f"data: {json.dumps({'progress': prog})}\n\n"
+            except queue.Empty:
+                pass
+
             try:
                 msg = _log_q.get_nowait()
                 yield f"data: {json.dumps({'log': msg})}\n\n"

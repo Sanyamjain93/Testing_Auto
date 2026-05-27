@@ -89,7 +89,13 @@ def _clean_llm_json(raw: str) -> str:
     return "".join(result)
 
 
-def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-instruct"):
+def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-instruct", emit_progress=None):
+    def emit(stage: str, status: str) -> None:
+        """Emit progress event if callback is provided."""
+        if emit_progress:
+            emit_progress(stage, status)
+
+    emit("loading_documents", "running")
     print(f"📂 Loading documents from: {INPUT_DIR}")
     logger.info(f"[PIPELINE] run() started — loading from {INPUT_DIR}")
     if not Path(INPUT_DIR).exists():
@@ -116,6 +122,7 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
 
     print(f"✅ Documents loaded. {len(all_chunks)} requirement chunks across all files.\n")
     logger.info(f"[PIPELINE] {len(all_chunks)} requirement chunks loaded from {INPUT_DIR}")
+    emit("loading_documents", "done")
 
     # Extract plain texts for embedding
     chunk_texts = [c["requirement_text"] for c in all_chunks]
@@ -128,6 +135,7 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
     logger.info(f"[PIPELINE] Embeddings complete. dim={len(vectors[0])}")
 
     # ── Load existing FAISS index or build a new one ───────────────────────
+    emit("rag_retrieval", "running")
     if Path(FAISS_INDEX_FILE).exists() and Path(RAG_METADATA_FILE).exists():
         print("🗄️  Loading existing FAISS index from disk...")
         store = VectorStore.load(FAISS_INDEX_FILE, RAG_METADATA_FILE)
@@ -151,9 +159,11 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
         logger.info(f"[PIPELINE] FAISS index built and saved: {store.index.ntotal} vectors")
 
     llm = MistralLLM(provider, model)
+    emit("rag_retrieval", "done")
 
     print(f"🤖 Starting test case generation ({len(all_chunks)} chunks) with {provider} / {model}...\n")
     logger.info(f"[PIPELINE] Starting generation for {len(all_chunks)} chunks")
+    emit("generating_tests", "running")
 
     test_cases = []
     # Coverage tracking: requirement_id → list of test names
@@ -302,3 +312,4 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
     write_excel(test_cases, OUTPUT_FILE)
     print(f"✅ Done! Output saved to: {OUTPUT_FILE}")
     logger.info(f"[PIPELINE] Pipeline complete. {len(test_cases)} test cases saved to {OUTPUT_FILE}")
+    emit("generating_tests", "done")

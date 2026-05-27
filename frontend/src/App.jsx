@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import UploadSection from './components/UploadSection'
+import ProgressStatus from './components/ProgressStatus'
 import LogStream from './components/LogStream'
 import ResultsTable from './components/ResultsTable'
 import styles from './App.module.css'
@@ -31,6 +32,8 @@ export default function App() {
   const [ragStatus, setRagStatus] = useState('') // '' | 'refreshing' | 'done' | 'error'
   const [scriptStatus, setScriptStatus] = useState('') // '' | 'generating' | 'done' | 'error'
   const [selectedLlm, setSelectedLlm] = useState(DEFAULT_LLM)
+  const [progress, setProgress] = useState({ currentStage: null, currentStatus: null })
+  const [showLogs, setShowLogs] = useState(false)
   const esRef = useRef(null)
 
   // Poll status on mount (resume if pipeline was already running)
@@ -56,6 +59,9 @@ export default function App() {
 
     es.onmessage = (e) => {
       const data = JSON.parse(e.data)
+      if (data.progress) {
+        setProgress({ currentStage: data.progress.stage, currentStatus: data.progress.status })
+      }
       if (data.log) {
         setLogs(prev => [...prev, data.log])
       }
@@ -91,6 +97,8 @@ export default function App() {
     setLogs([])
     setResults([])
     setErrorMsg('')
+    setProgress({ currentStage: null, currentStatus: null })
+    setShowLogs(false)
 
     // ── Upload ──────────────────────────────────────────────────────────────
     setPhase(PHASE.UPLOADING)
@@ -135,6 +143,8 @@ export default function App() {
     setErrorMsg('')
     setUploadedNames([])
     setScriptStatus('')
+    setProgress({ currentStage: null, currentStatus: null })
+    setShowLogs(false)
   }
 
   const handleRefreshRag = useCallback(async () => {
@@ -326,7 +336,17 @@ export default function App() {
         <section className={styles.rightCol}>
           {(logs.length > 0 || isRunning) && (
             <Card title="Pipeline Logs" accent>
-              <LogStream logs={logs} running={isRunning} />
+              <ProgressStatus
+                progress={progress}
+                errorMsg={errorMsg}
+                showLogs={showLogs}
+                onToggleLogs={() => setShowLogs(!showLogs)}
+              />
+              {showLogs && (
+                <div style={{ marginTop: '16px' }}>
+                  <LogStream logs={logs} running={isRunning} />
+                </div>
+              )}
             </Card>
           )}
 
