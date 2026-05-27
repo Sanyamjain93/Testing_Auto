@@ -15,6 +15,7 @@ import contextlib
 import io
 import json
 import logging
+import mimetypes
 import queue
 import re
 import shutil
@@ -329,6 +330,38 @@ def download_scripts_endpoint() -> FileResponse:
         media_type="application/zip",
         filename="playwright_scripts.zip",
     )
+
+
+def _derive_script_label(script_name: str, script_content: str) -> str:
+    """Build a user-friendly label from the first test title in the script."""
+    match = re.search(r"test\s*\(\s*['\"]([^'\"]+)['\"]", script_content)
+    if match:
+        return match.group(1).strip()
+    return Path(script_name).stem.replace("_", " ")
+
+
+@app.get("/scripts")
+def list_scripts() -> dict:
+    """Return generated Playwright scripts for in-app code viewer."""
+    scripts = sorted(SCRIPTS_DIR.glob("*.spec.js")) if SCRIPTS_DIR.exists() else []
+    if not scripts:
+        return {"scripts": []}
+
+    items = []
+    for script_path in scripts:
+        content = script_path.read_text(encoding="utf-8")
+        items.append(
+            {
+                "name": script_path.name,
+                "label": _derive_script_label(script_path.name, content),
+                "language": "javascript",
+                "content": content,
+                "size": script_path.stat().st_size,
+                "mime": mimetypes.guess_type(script_path.name)[0] or "text/plain",
+            }
+        )
+
+    return {"scripts": items}
 
 
 @app.get("/results")

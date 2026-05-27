@@ -172,6 +172,3 @@ function getVerdictName(verdict) {
   if (v.includes('warn') || v.includes('review')) return 'Warn'
   return 'Neutral'
 }
-    </div>
-  )
-}

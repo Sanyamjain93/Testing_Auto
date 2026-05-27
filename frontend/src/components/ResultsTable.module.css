@@ -405,33 +405,3 @@
     min-width: 100%;
   }
 }
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-}
-
-.pageBtn {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  border-radius: var(--radius);
-  padding: 6px 14px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-
-.pageBtn:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.pageBtn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.pageInfo {
-  font-size: 12px;
-  color: var(--text-muted);
-}

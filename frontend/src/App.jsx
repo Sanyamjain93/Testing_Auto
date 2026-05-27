@@ -4,6 +4,7 @@ import ProgressStatus from './components/ProgressStatus'
 import TestSummary from './components/TestSummary'
 import LogStream from './components/LogStream'
 import ResultsTable from './components/ResultsTable'
+import ScriptViewer from './components/ScriptViewer'
 import styles from './App.module.css'
 
 const PHASE = {
@@ -32,6 +33,10 @@ export default function App() {
   const [uploadedNames, setUploadedNames] = useState([])
   const [ragStatus, setRagStatus] = useState('') // '' | 'refreshing' | 'done' | 'error'
   const [scriptStatus, setScriptStatus] = useState('') // '' | 'generating' | 'done' | 'error'
+  const [scripts, setScripts] = useState([])
+  const [scriptsLoading, setScriptsLoading] = useState(false)
+  const [scriptsError, setScriptsError] = useState('')
+  const [selectedScriptName, setSelectedScriptName] = useState('')
   const [selectedLlm, setSelectedLlm] = useState(DEFAULT_LLM)
   const [progress, setProgress] = useState({ currentStage: null, currentStatus: null })
   const [activeTab, setActiveTab] = useState('progress') // 'progress' | 'results' | 'scripts' | 'logs'
@@ -92,6 +97,24 @@ export default function App() {
       .catch(() => setErrorMsg('Failed to load results.'))
   }, [])
 
+  const loadScripts = useCallback(async () => {
+    setScriptsLoading(true)
+    setScriptsError('')
+    try {
+      const res = await fetch('/scripts')
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || 'Failed to load scripts')
+      const list = data.scripts || []
+      setScripts(list)
+      setSelectedScriptName(prev => prev || (list[0]?.name || ''))
+    } catch (e) {
+      setScripts([])
+      setScriptsError(e.message)
+    } finally {
+      setScriptsLoading(false)
+    }
+  }, [])
+
   const handleUploadAndRun = useCallback(async () => {
     if (files.length === 0) return
 
@@ -144,6 +167,10 @@ export default function App() {
     setErrorMsg('')
     setUploadedNames([])
     setScriptStatus('')
+    setScripts([])
+    setScriptsLoading(false)
+    setScriptsError('')
+    setSelectedScriptName('')
     setProgress({ currentStage: null, currentStatus: null })
     setActiveTab('progress')
   }
@@ -182,21 +209,31 @@ export default function App() {
 
   const handleGenerateScripts = useCallback(async () => {
     setScriptStatus('generating')
+    setScriptsError('')
+    setActiveTab('scripts')
     try {
       const res = await fetch('/generate-scripts', { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Script generation failed')
       setLogs(prev => [...prev, `[SCRIPT] ${data.count} Playwright script(s) generated ✅`])
       setScriptStatus('done')
+      await loadScripts()
     } catch (e) {
       setLogs(prev => [...prev, `[SCRIPT ERROR] ${e.message}`])
       setScriptStatus('error')
+      setScriptsError(e.message)
     }
-  }, [])
+  }, [loadScripts])
 
   const handleDownloadScripts = () => {
     window.open('/download-scripts', '_blank')
   }
+
+  useEffect(() => {
+    if (activeTab === 'scripts' && scriptStatus === 'done' && scripts.length === 0 && !scriptsLoading) {
+      loadScripts()
+    }
+  }, [activeTab, scriptStatus, scripts.length, scriptsLoading, loadScripts])
 
   const isRunning = phase === PHASE.RUNNING || phase === PHASE.UPLOADING
   const canRun = files.length > 0 && !isRunning
@@ -335,7 +372,7 @@ export default function App() {
                 ✅ Test Cases ({results.length})
               </button>
             )}
-            {scriptStatus === 'done' && (
+            {(scriptStatus === 'done' || scriptStatus === 'generating') && (
               <button
                 className={`${styles.tab} ${activeTab === 'scripts' ? styles.tabActive : ''}`}
                 onClick={() => setActiveTab('scripts')}
@@ -384,15 +421,16 @@ export default function App() {
             )}
 
             {/* Scripts Tab */}
-            {activeTab === 'scripts' && scriptStatus === 'done' && (
+            {activeTab === 'scripts' && (scriptStatus === 'done' || scriptStatus === 'generating' || scriptStatus === 'error') && (
               <div className={styles.tabPane}>
-                <div className={styles.scriptInfo}>
-                  <div className={styles.scriptIcon}>⚡</div>
-                  <p>Playwright scripts have been generated successfully.</p>
-                  <button className={styles.primaryBtn} onClick={handleDownloadScripts}>
-                    ⬇ Download Scripts (.zip)
-                  </button>
-                </div>
+                <ScriptViewer
+                  scripts={scripts}
+                  loading={scriptStatus === 'generating' || scriptsLoading}
+                  error={scriptsError}
+                  onDownloadAll={handleDownloadScripts}
+                  selectedScriptName={selectedScriptName}
+                  onSelectScript={setSelectedScriptName}
+                />
               </div>
             )}
 
