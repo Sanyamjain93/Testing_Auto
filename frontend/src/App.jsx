@@ -328,11 +328,11 @@ export default function App() {
 
             {phase === PHASE.DONE && results.length > 0 && (
               <>
-                <button className={styles.actionBtn} onClick={handleDownload}>
+                <button className={styles.primaryBtn} onClick={handleDownload}>
                   ⬇ Download Excel
                 </button>
                 <button
-                  className={styles.actionBtn}
+                  className={styles.primaryBtn}
                   onClick={handleGenerateScripts}
                   disabled={scriptStatus === 'generating'}
                 >
@@ -341,7 +341,7 @@ export default function App() {
                     : '⚡ Generate Scripts'}
                 </button>
                 {scriptStatus === 'done' && (
-                  <button className={styles.actionBtn} onClick={handleDownloadScripts}>
+                  <button className={styles.primaryBtn} onClick={handleDownloadScripts}>
                     ⬇ Download Scripts
                   </button>
                 )}
@@ -374,7 +374,7 @@ export default function App() {
                 className={`${styles.tab} ${activeTab === 'results' ? styles.tabActive : ''}`}
                 onClick={() => setActiveTab('results')}
               >
-                ✅ Test Cases ({results.length})
+                ✅ Test Cases ({new Set(results.map(r => `${r['Requirement ID']}_${r['Test Name']}`)).size})
               </button>
             )}
             {(scriptStatus === 'done' || scriptStatus === 'generating') && (
