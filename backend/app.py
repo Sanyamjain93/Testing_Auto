@@ -65,6 +65,7 @@ app.add_middleware(
 
 # ── shared state (single-pipeline assumption) ─────────────────────────────────
 _state: dict = {"running": False, "done": False, "error": None}
+_lock = threading.Lock()  # guards all check-then-modify operations on _state / _selected_llm
 _log_q: queue.Queue = queue.Queue()
 _progress_q: queue.Queue = queue.Queue()  # for structured progress events
 _ALLOWED_EXT = {".pdf", ".docx", ".txt", ".md"}
@@ -95,19 +96,23 @@ class _QueueWriter(io.TextIOBase):
 
 def _pipeline_thread() -> None:
     writer = _QueueWriter()
-    provider = _selected_llm["provider"]
-    model = _selected_llm["model"]
+    # Snapshot LLM config under lock so a concurrent /set-llm cannot half-update it
+    with _lock:
+        provider = _selected_llm["provider"]
+        model = _selected_llm["model"]
     log_file = new_run_log()
     logger.info(f"[PIPELINE] Run log: {log_file}")
     try:
         with contextlib.redirect_stdout(writer):
             from pipeline import run  # noqa: PLC0415 – late import intentional
             run(provider=provider, model=model, emit_progress=emit_progress)
-        _state.update({"running": False, "done": True, "error": None})
+        with _lock:
+            _state.update({"running": False, "done": True, "error": None})
     except Exception as exc:  # noqa: BLE001
         logger.error("Pipeline failed", exc_info=True)
         _log_q.put(f"❌ Pipeline error: {exc}")
-        _state.update({"running": False, "done": True, "error": str(exc)})
+        with _lock:
+            _state.update({"running": False, "done": True, "error": str(exc)})
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
@@ -124,15 +129,16 @@ def get_llm_options() -> dict:
 
 @app.post("/set-llm")
 def set_llm(selection: LLMSelection) -> dict:
-    if _state["running"]:
-        raise HTTPException(status_code=409, detail="Pipeline is running. Cannot change LLM now.")
     valid = any(
         o["provider"] == selection.provider and o["model"] == selection.model
         for o in LLM_OPTIONS
     )
     if not valid:
         raise HTTPException(status_code=400, detail="Unknown provider/model combination.")
-    _selected_llm.update({"provider": selection.provider, "model": selection.model})
+    with _lock:
+        if _state["running"]:
+            raise HTTPException(status_code=409, detail="Pipeline is running. Cannot change LLM now.")
+        _selected_llm.update({"provider": selection.provider, "model": selection.model})
     logger.info(f"[LLM] Selected: {selection.provider} / {selection.model}")
     return {"status": "ok", "selected": _selected_llm}
 
@@ -150,16 +156,30 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict:
                 detail=f"'{ext}' is not allowed. Accepted: {sorted(_ALLOWED_EXT)}",
             )
 
-    # Clear previous uploads
-    for existing in INPUT_DIR.iterdir():
-        existing.unlink()
+    # Save to a staging directory first — only swap into INPUT_DIR when all writes succeed.
+    # This prevents a partial upload from leaving the input directory in a broken state.
+    staging = INPUT_DIR.parent / "_upload_staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
 
     saved: list[str] = []
-    for f in files:
-        dest = INPUT_DIR / Path(f.filename).name  # strip any path components
-        with dest.open("wb") as out:
-            shutil.copyfileobj(f.file, out)
-        saved.append(f.filename)
+    try:
+        for f in files:
+            dest = staging / Path(f.filename).name  # strip any path components
+            with dest.open("wb") as out:
+                shutil.copyfileobj(f.file, out)
+            saved.append(f.filename)
+    except Exception as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"File save failed: {exc}") from exc
+
+    # All writes succeeded — atomically replace INPUT_DIR contents
+    for existing in INPUT_DIR.iterdir():
+        existing.unlink()
+    for staged_file in staging.iterdir():
+        shutil.move(str(staged_file), INPUT_DIR / staged_file.name)
+    shutil.rmtree(staging, ignore_errors=True)
 
     logger.info(f"Uploaded {len(saved)} file(s): {saved}")
     return {"uploaded": saved}
@@ -168,9 +188,10 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict:
 @app.post("/reset")
 def reset_state() -> dict:
     """Reset backend pipeline state so the frontend starts clean after a user-triggered reset."""
-    if _state["running"]:
-        raise HTTPException(status_code=409, detail="Pipeline is running. Wait for it to finish before resetting.")
-    _state.update({"running": False, "done": False, "error": None})
+    with _lock:
+        if _state["running"]:
+            raise HTTPException(status_code=409, detail="Pipeline is running. Wait for it to finish before resetting.")
+        _state.update({"running": False, "done": False, "error": None})
     while not _log_q.empty():
         _log_q.get_nowait()
     while not _progress_q.empty():
@@ -181,10 +202,10 @@ def reset_state() -> dict:
 
 @app.post("/run")
 def start_pipeline() -> dict:
-    if _state["running"]:
-        return {"status": "already_running"}
-
-    _state.update({"running": True, "done": False, "error": None})
+    with _lock:
+        if _state["running"]:
+            return {"status": "already_running"}
+        _state.update({"running": True, "done": False, "error": None})
 
     # Drain stale log messages from a previous run
     while not _log_q.empty():
@@ -215,6 +236,22 @@ async def stream_logs() -> StreamingResponse:
                 yield f"data: {json.dumps({'log': msg})}\n\n"
             except queue.Empty:
                 if not _state["running"]:
+                    # Drain any items that arrived between the last poll and shutdown
+                    draining = True
+                    while draining:
+                        draining = False
+                        try:
+                            prog = _progress_q.get_nowait()
+                            yield f"data: {json.dumps({'progress': prog})}\n\n"
+                            draining = True
+                        except queue.Empty:
+                            pass
+                        try:
+                            leftover = _log_q.get_nowait()
+                            yield f"data: {json.dumps({'log': leftover})}\n\n"
+                            draining = True
+                        except queue.Empty:
+                            pass
                     break
                 await asyncio.sleep(0.15)
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-javascript'
+import DOMPurify from 'dompurify'
 import styles from './ScriptViewer.module.css'
 
 function downloadScriptFile(name, content) {
@@ -32,7 +33,8 @@ export default function ScriptViewer({
 
   const highlightedCode = useMemo(() => {
     if (!selectedScript?.content) return ''
-    return Prism.highlight(selectedScript.content, Prism.languages.javascript, 'javascript')
+    const raw = Prism.highlight(selectedScript.content, Prism.languages.javascript, 'javascript')
+    return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
   }, [selectedScript])
 
   const handleCopy = async () => {

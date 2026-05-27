@@ -16,7 +16,7 @@ def load_document(path: Path) -> str:
         df = pd.read_excel(path)
         return "\n".join(df.astype(str).values.flatten())
 
-    if path.suffix == ".txt":
-        return path.read_text()
+    if path.suffix in (".txt", ".md"):
+        return path.read_text(encoding="utf-8", errors="replace")
 
     raise ValueError(f"Unsupported file type: {path.suffix}")
