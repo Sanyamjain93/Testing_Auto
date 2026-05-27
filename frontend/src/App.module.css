@@ -2,7 +2,8 @@
 .layout {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
@@ -81,18 +82,43 @@
   margin: 0 auto;
   width: 100%;
   align-items: start;
+  height: calc(100vh - 64px);
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 @media (max-width: 900px) {
   .main {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+  }
+  .leftCol, .rightCol {
+    height: auto;
+    overflow-y: visible;
   }
 }
 
-.leftCol, .rightCol {
+.leftCol {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.rightCol {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 /* ── Card ────────────────────────────────────────────────────────────────── */

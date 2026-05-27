@@ -39,10 +39,12 @@
 
 .tableWrap {
   overflow-x: auto;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  max-height: 480px;
-  overflow-y: auto;
+  max-height: 520px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 .table {

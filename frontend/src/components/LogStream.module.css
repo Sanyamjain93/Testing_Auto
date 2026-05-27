@@ -5,11 +5,15 @@
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   font-size: 12px;
   line-height: 1.7;
-  max-height: 360px;
+  max-height: 420px;
   overflow-y: auto;
+  overflow-x: auto;
   display: flex;
   flex-direction: column;
   gap: 1px;
+  scrollbar-width: thin;
+  scrollbar-color: #333 #0d0f18;
+  white-space: pre;
 }
 
 .waiting {
