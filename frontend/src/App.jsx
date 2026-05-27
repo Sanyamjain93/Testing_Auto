@@ -122,7 +122,7 @@ export default function App() {
     setResults([])
     setErrorMsg('')
     setProgress({ currentStage: null, currentStatus: null })
-    setActiveTab('progress')
+    setActiveTab('logs')
 
     // ── Upload ──────────────────────────────────────────────────────────────
     setPhase(PHASE.UPLOADING)
@@ -382,7 +382,7 @@ export default function App() {
                 ⚡ Scripts
               </button>
             )}
-            {logs.length > 0 && (
+            {(logs.length > 0 || isRunning) && (
               <button
                 className={`${styles.tab} ${activeTab === 'logs' ? styles.tabActive : ''}`}
                 onClick={() => setActiveTab('logs')}
@@ -437,7 +437,7 @@ export default function App() {
             )}
 
             {/* Logs Tab */}
-            {activeTab === 'logs' && logs.length > 0 && (
+            {activeTab === 'logs' && (logs.length > 0 || isRunning) && (
               <div className={styles.tabPane}>
                 <LogStream logs={logs} running={isRunning} />
               </div>
