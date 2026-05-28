@@ -5,6 +5,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/login': { target: 'http://localhost:8000', changeOrigin: true },
+      '/logout': { target: 'http://localhost:8000', changeOrigin: true },
+      '/me': { target: 'http://localhost:8000', changeOrigin: true },
       '/status': 'http://localhost:8000',
       '/upload': 'http://localhost:8000',
       '/run': 'http://localhost:8000',

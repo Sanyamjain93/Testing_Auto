@@ -1,14 +1,8 @@
 """
-FastAPI backend for the AI Test Case Generator.
+FastAPI backend — AI Test Case Generator with session-based authentication.
 
-Endpoints
----------
-GET  /status          – pipeline state
-POST /upload          – upload requirement documents
-POST /run             – start the pipeline (background thread)
-GET  /stream          – SSE log stream (real-time progress)
-GET  /results         – generated test cases as JSON
-GET  /download        – download generated_tests.xlsx
+Each user gets an isolated session: own input/output dirs, own pipeline state,
+own LLM selection, own SSE queues. Data is in-memory only, destroyed on logout.
 """
 
 import contextlib
@@ -21,36 +15,35 @@ import re
 import shutil
 import sys
 import threading
+import uuid
 import zipfile
 from pathlib import Path
 from typing import AsyncGenerator
 
+import pandas as pd
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-ROOT = Path(__file__).parent.parent          # project root
-INPUT_DIR = ROOT / "data" / "sample_requirements"
-OUTPUT_FILE = ROOT / "data" / "generated_tests.xlsx"
-FAISS_INDEX_FILE = ROOT / "data" / "faiss_index.faiss"
-RAG_METADATA_FILE = ROOT / "data" / "metadata.json"
-SCRIPTS_DIR = ROOT / "scripts"
+ROOT           = Path(__file__).parent.parent
+SESSIONS_BASE  = ROOT / "data" / "sessions"
+USERS_FILE     = ROOT / "users.xlsx"
 FRONTEND_BUILD = ROOT / "frontend" / "dist"
 
-sys.path.insert(0, str(ROOT))               # make project-level imports available
+sys.path.insert(0, str(ROOT))
 
-from logger import get_logger, new_run_log  # noqa: E402 – must come after sys.path update
+from logger import get_logger, new_run_log  # noqa: E402
 from util.mistral_client import LLM_OPTIONS, MistralLLM  # noqa: E402
 from util.playwright_generator import generate_grouped_script, generate_playwright_script  # noqa: E402
 
 logger = get_logger("test_automation.backend")
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
-app = FastAPI(title="AI Test Case Generator API", version="1.0.0")
+app = FastAPI(title="AI Test Case Generator API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -59,19 +52,67 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "https://test-automation-2251.azurewebsites.net",
     ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── shared state (single-pipeline assumption) ─────────────────────────────────
-_state: dict = {"running": False, "done": False, "error": None}
-_lock = threading.Lock()  # guards all check-then-modify operations on _state / _selected_llm
-_log_q: queue.Queue = queue.Queue()
-_progress_q: queue.Queue = queue.Queue()  # for structured progress events
 _ALLOWED_EXT = {".pdf", ".docx", ".txt", ".md"}
 
-# ── LLM selection state ────────────────────────────────────────────────────────
-_selected_llm: dict = LLM_OPTIONS[3].copy()  # default: Groq llama-4-scout
+# ── User authentication ────────────────────────────────────────────────────────
+def _load_users() -> pd.DataFrame:
+    if USERS_FILE.exists():
+        return pd.read_excel(USERS_FILE, dtype=str)
+    logger.warning("users.xlsx not found — no users can log in")
+    return pd.DataFrame(columns=["username", "password"])
+
+
+_users_df: pd.DataFrame = _load_users()
+
+
+def validate_user(username: str, password: str) -> bool:
+    mask = (_users_df["username"] == username) & (_users_df["password"] == password)
+    return bool(mask.any())
+
+
+# ── Session store ──────────────────────────────────────────────────────────────
+user_sessions: dict = {}
+
+
+def _session_dir(sid: str) -> Path:
+    return SESSIONS_BASE / sid
+
+
+def _create_session(username: str) -> tuple[str, dict]:
+    sid = str(uuid.uuid4())
+    sess_dir = _session_dir(sid)
+    return sid, {
+        "username": username,
+        "state":    {"running": False, "done": False, "error": None},
+        "lock":     threading.Lock(),
+        "log_q":    queue.Queue(),
+        "progress_q": queue.Queue(),
+        "selected_llm": LLM_OPTIONS[3].copy(),
+        "input_dir":         sess_dir / "input",
+        "output_file":       sess_dir / "output.xlsx",
+        "scripts_dir":       sess_dir / "scripts",
+        "faiss_index_file":  sess_dir / "faiss_index.faiss",
+        "rag_metadata_file": sess_dir / "metadata.json",
+    }
+
+
+def get_current_session(request: Request) -> tuple[str, dict]:
+    """Validate session cookie. Raises HTTP 401 if missing or unknown."""
+    sid = request.cookies.get("session_id")
+    if not sid or sid not in user_sessions:
+        raise HTTPException(status_code=401, detail="Not authenticated. Please log in.")
+    return sid, user_sessions[sid]
+
+
+# ── Pydantic models ────────────────────────────────────────────────────────────
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 class LLMSelection(BaseModel):
@@ -79,75 +120,134 @@ class LLMSelection(BaseModel):
     model: str
 
 
-# ── print() capture for SSE stream ───────────────────────────────────────────
-def emit_progress(stage: str, status: str) -> None:
-    """Emit a structured progress event (visible to frontend)."""
-    _progress_q.put({"stage": stage, "status": status})
+# ── Pipeline infrastructure ────────────────────────────────────────────────────
+def _make_emit(progress_q: queue.Queue):
+    def emit(stage: str, status: str) -> None:
+        progress_q.put({"stage": stage, "status": status})
+    return emit
 
 
 class _QueueWriter(io.TextIOBase):
-    """Redirect print() output into the SSE log queue (frontend-visible)."""
+    """Redirect print() into a per-session SSE log queue."""
+
+    def __init__(self, log_q: queue.Queue) -> None:
+        self._q = log_q
 
     def write(self, s: str) -> int:
         if s.strip():
-            _log_q.put(s.rstrip())
+            self._q.put(s.rstrip())
         return len(s)
 
 
-def _pipeline_thread() -> None:
-    writer = _QueueWriter()
-    # Snapshot LLM config under lock so a concurrent /set-llm cannot half-update it
-    with _lock:
-        provider = _selected_llm["provider"]
-        model = _selected_llm["model"]
+def _pipeline_thread(sid: str) -> None:
+    if sid not in user_sessions:
+        return
+    sess   = user_sessions[sid]
+    writer = _QueueWriter(sess["log_q"])
+    with sess["lock"]:
+        provider = sess["selected_llm"]["provider"]
+        model    = sess["selected_llm"]["model"]
     log_file = new_run_log()
-    logger.info(f"[PIPELINE] Run log: {log_file}")
+    logger.info(f"[PIPELINE][{sess['username']}] Run log: {log_file}")
     try:
+        sess["input_dir"].mkdir(parents=True, exist_ok=True)
         with contextlib.redirect_stdout(writer):
-            from pipeline import run  # noqa: PLC0415 – late import intentional
-            run(provider=provider, model=model, emit_progress=emit_progress)
-        with _lock:
-            _state.update({"running": False, "done": True, "error": None})
+            from pipeline import run  # noqa: PLC0415
+            run(
+                provider=provider,
+                model=model,
+                emit_progress=_make_emit(sess["progress_q"]),
+                input_dir=str(sess["input_dir"]),
+                output_file=str(sess["output_file"]),
+                faiss_index_file=str(sess["faiss_index_file"]),
+                rag_metadata_file=str(sess["rag_metadata_file"]),
+            )
+        with sess["lock"]:
+            sess["state"].update({"running": False, "done": True, "error": None})
     except Exception as exc:  # noqa: BLE001
         logger.error("Pipeline failed", exc_info=True)
-        _log_q.put(f"❌ Pipeline error: {exc}")
-        with _lock:
-            _state.update({"running": False, "done": True, "error": str(exc)})
+        sess["log_q"].put(f"❌ Pipeline error: {exc}")
+        with sess["lock"]:
+            sess["state"].update({"running": False, "done": True, "error": str(exc)})
 
 
-# ── API routes ────────────────────────────────────────────────────────────────
+# ── Auth endpoints ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/login")
+def login(body: LoginRequest, response: Response) -> dict:
+    if not validate_user(body.username, body.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+    sid, sess = _create_session(body.username)
+    user_sessions[sid] = sess
+    response.set_cookie(
+        key="session_id",
+        value=sid,
+        httponly=True,
+        samesite="lax",
+        secure=False,   # set True in production behind HTTPS
+        max_age=86400,  # 24-hour expiry
+    )
+    logger.info(f"[AUTH] '{body.username}' logged in (sid={sid[:8]}…)")
+    return {"message": "Login successful", "username": body.username}
+
+
+@app.post("/logout")
+def logout(request: Request, response: Response) -> dict:
+    sid = request.cookies.get("session_id")
+    if sid and sid in user_sessions:
+        username = user_sessions[sid]["username"]
+        sess_dir = _session_dir(sid)
+        user_sessions.pop(sid, None)
+        if sess_dir.exists():
+            shutil.rmtree(sess_dir, ignore_errors=True)
+        logger.info(f"[AUTH] '{username}' logged out (sid={sid[:8]}…)")
+    response.delete_cookie("session_id")
+    return {"message": "Logged out successfully"}
+
+
+@app.get("/me")
+def get_me(request: Request) -> dict:
+    _, sess = get_current_session(request)
+    return {"username": sess["username"], "authenticated": True}
+
+
+# ── Pipeline endpoints ─────────────────────────────────────────────────────────────────────────
 
 @app.get("/status")
-def get_status() -> dict:
-    return _state
+def get_status(request: Request) -> dict:
+    _, sess = get_current_session(request)
+    return sess["state"]
 
 
 @app.get("/llm-options")
-def get_llm_options() -> dict:
-    return {"options": LLM_OPTIONS, "selected": _selected_llm}
+def get_llm_options(request: Request) -> dict:
+    _, sess = get_current_session(request)
+    return {"options": LLM_OPTIONS, "selected": sess["selected_llm"]}
 
 
 @app.post("/set-llm")
-def set_llm(selection: LLMSelection) -> dict:
+def set_llm(selection: LLMSelection, request: Request) -> dict:
+    _, sess = get_current_session(request)
     valid = any(
         o["provider"] == selection.provider and o["model"] == selection.model
         for o in LLM_OPTIONS
     )
     if not valid:
         raise HTTPException(status_code=400, detail="Unknown provider/model combination.")
-    with _lock:
-        if _state["running"]:
+    with sess["lock"]:
+        if sess["state"]["running"]:
             raise HTTPException(status_code=409, detail="Pipeline is running. Cannot change LLM now.")
-        _selected_llm.update({"provider": selection.provider, "model": selection.model})
-    logger.info(f"[LLM] Selected: {selection.provider} / {selection.model}")
-    return {"status": "ok", "selected": _selected_llm}
+        sess["selected_llm"].update({"provider": selection.provider, "model": selection.model})
+    logger.info(f"[LLM][{sess['username']}] Selected: {selection.provider} / {selection.model}")
+    return {"status": "ok", "selected": sess["selected_llm"]}
 
 
 @app.post("/upload")
-async def upload_files(files: list[UploadFile] = File(...)) -> dict:
-    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+async def upload_files(request: Request, files: list[UploadFile] = File(...)) -> dict:
+    _, sess = get_current_session(request)
+    session_input_dir = sess["input_dir"]
+    session_input_dir.mkdir(parents=True, exist_ok=True)
 
-    # Validate extensions before touching the filesystem
     for f in files:
         ext = Path(f.filename).suffix.lower()
         if ext not in _ALLOWED_EXT:
@@ -156,9 +256,7 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict:
                 detail=f"'{ext}' is not allowed. Accepted: {sorted(_ALLOWED_EXT)}",
             )
 
-    # Save to a staging directory first — only swap into INPUT_DIR when all writes succeed.
-    # This prevents a partial upload from leaving the input directory in a broken state.
-    staging = INPUT_DIR.parent / "_upload_staging"
+    staging = session_input_dir.parent / "_staging"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
@@ -166,7 +264,7 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict:
     saved: list[str] = []
     try:
         for f in files:
-            dest = staging / Path(f.filename).name  # strip any path components
+            dest = staging / Path(f.filename).name
             with dest.open("wb") as out:
                 shutil.copyfileobj(f.file, out)
             saved.append(f.filename)
@@ -174,80 +272,86 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict:
         shutil.rmtree(staging, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"File save failed: {exc}") from exc
 
-    # All writes succeeded — atomically replace INPUT_DIR contents
-    for existing in INPUT_DIR.iterdir():
+    for existing in session_input_dir.iterdir():
         existing.unlink()
     for staged_file in staging.iterdir():
-        shutil.move(str(staged_file), INPUT_DIR / staged_file.name)
+        shutil.move(str(staged_file), session_input_dir / staged_file.name)
     shutil.rmtree(staging, ignore_errors=True)
 
-    logger.info(f"Uploaded {len(saved)} file(s): {saved}")
+    logger.info(f"[UPLOAD][{sess['username']}] {len(saved)} file(s): {saved}")
     return {"uploaded": saved}
 
 
 @app.post("/reset")
-def reset_state() -> dict:
-    """Reset backend pipeline state so the frontend starts clean after a user-triggered reset."""
-    with _lock:
-        if _state["running"]:
-            raise HTTPException(status_code=409, detail="Pipeline is running. Wait for it to finish before resetting.")
-        _state.update({"running": False, "done": False, "error": None})
-    while not _log_q.empty():
-        _log_q.get_nowait()
-    while not _progress_q.empty():
-        _progress_q.get_nowait()
-    logger.info("[RESET] State cleared by user.")
+def reset_state(request: Request) -> dict:
+    """Reset per-session pipeline state and clear queues."""
+    _, sess = get_current_session(request)
+    with sess["lock"]:
+        if sess["state"]["running"]:
+            raise HTTPException(
+                status_code=409,
+                detail="Pipeline is running. Wait for it to finish before resetting.",
+            )
+        sess["state"].update({"running": False, "done": False, "error": None})
+    while not sess["log_q"].empty():
+        sess["log_q"].get_nowait()
+    while not sess["progress_q"].empty():
+        sess["progress_q"].get_nowait()
+    logger.info(f"[RESET][{sess['username']}] State cleared.")
     return {"status": "reset"}
 
 
 @app.post("/run")
-def start_pipeline() -> dict:
-    with _lock:
-        if _state["running"]:
+def start_pipeline(request: Request) -> dict:
+    sid, sess = get_current_session(request)
+    with sess["lock"]:
+        if sess["state"]["running"]:
             return {"status": "already_running"}
-        _state.update({"running": True, "done": False, "error": None})
+        sess["state"].update({"running": True, "done": False, "error": None})
 
-    # Drain stale log messages from a previous run
-    while not _log_q.empty():
-        _log_q.get_nowait()
-    while not _progress_q.empty():
-        _progress_q.get_nowait()
+    while not sess["log_q"].empty():
+        sess["log_q"].get_nowait()
+    while not sess["progress_q"].empty():
+        sess["progress_q"].get_nowait()
 
-    thread = threading.Thread(target=_pipeline_thread, daemon=True)
+    thread = threading.Thread(target=_pipeline_thread, args=(sid,), daemon=True)
     thread.start()
     return {"status": "started"}
 
 
 @app.get("/stream")
-async def stream_logs() -> StreamingResponse:
+async def stream_logs(request: Request) -> StreamingResponse:
     import asyncio  # noqa: PLC0415
+
+    _, sess     = get_current_session(request)
+    log_q      = sess["log_q"]
+    progress_q = sess["progress_q"]
+    state      = sess["state"]
 
     async def _generate() -> AsyncGenerator[str, None]:
         while True:
             try:
-                # Check for progress events first
-                prog = _progress_q.get_nowait()
+                prog = progress_q.get_nowait()
                 yield f"data: {json.dumps({'progress': prog})}\n\n"
             except queue.Empty:
                 pass
 
             try:
-                msg = _log_q.get_nowait()
+                msg = log_q.get_nowait()
                 yield f"data: {json.dumps({'log': msg})}\n\n"
             except queue.Empty:
-                if not _state["running"]:
-                    # Drain any items that arrived between the last poll and shutdown
+                if not state["running"]:
                     draining = True
                     while draining:
                         draining = False
                         try:
-                            prog = _progress_q.get_nowait()
+                            prog = progress_q.get_nowait()
                             yield f"data: {json.dumps({'progress': prog})}\n\n"
                             draining = True
                         except queue.Empty:
                             pass
                         try:
-                            leftover = _log_q.get_nowait()
+                            leftover = log_q.get_nowait()
                             yield f"data: {json.dumps({'log': leftover})}\n\n"
                             draining = True
                         except queue.Empty:
@@ -255,9 +359,8 @@ async def stream_logs() -> StreamingResponse:
                     break
                 await asyncio.sleep(0.15)
 
-        # Final event
-        if _state.get("error"):
-            yield f"data: {json.dumps({'error': _state['error']})}\n\n"
+        if state.get("error"):
+            yield f"data: {json.dumps({'error': state['error']})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
 
     return StreamingResponse(
@@ -268,24 +371,32 @@ async def stream_logs() -> StreamingResponse:
 
 
 @app.delete("/rag-index")
-def refresh_rag_index() -> dict:
-    """Delete persisted FAISS index + metadata so they are rebuilt on the next Run."""
-    if _state["running"]:
-        raise HTTPException(status_code=409, detail="Pipeline is currently running. Wait for it to finish.")
+def refresh_rag_index(request: Request) -> dict:
+    """Delete the per-session FAISS index so it is rebuilt on the next run."""
+    _, sess = get_current_session(request)
+    if sess["state"]["running"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Pipeline is currently running. Wait for it to finish.",
+        )
     deleted = []
-    for f in (FAISS_INDEX_FILE, RAG_METADATA_FILE):
+    for f in (sess["faiss_index_file"], sess["rag_metadata_file"]):
         if f.exists():
             f.unlink()
             deleted.append(f.name)
-    logger.info(f"RAG index cleared by user: {deleted or 'nothing to delete'}")
+    logger.info(f"[RAG][{sess['username']}] Index cleared: {deleted or 'nothing to delete'}")
     return {"deleted": deleted, "message": "RAG index cleared. It will be rebuilt on the next Run."}
 
 
 @app.post("/generate-scripts")
-def generate_scripts_endpoint() -> dict:
-    """Read test cases from the Excel output, generate a Playwright script per test,
-    and save each file to the scripts/ directory."""
-    if not OUTPUT_FILE.exists():
+def generate_scripts_endpoint(request: Request) -> dict:
+    """Read test cases from the per-session Excel, generate Playwright scripts."""
+    _, sess = get_current_session(request)
+    output_file  = sess["output_file"]
+    scripts_dir  = sess["scripts_dir"]
+    selected_llm = sess["selected_llm"]
+
+    if not output_file.exists():
         raise HTTPException(
             status_code=404,
             detail="No test cases found. Run the pipeline first.",
@@ -293,11 +404,10 @@ def generate_scripts_endpoint() -> dict:
 
     import openpyxl  # noqa: PLC0415
 
-    wb = openpyxl.load_workbook(OUTPUT_FILE)
+    wb = openpyxl.load_workbook(output_file)
     ws = wb.active
     headers = [cell.value for cell in next(ws.iter_rows(max_row=1))]
 
-    # Reconstruct unique test objects from flat Excel rows (one row per step)
     tests_map: dict = {}
     for row_vals in ws.iter_rows(min_row=2, values_only=True):
         row = dict(zip(headers, row_vals))
@@ -320,67 +430,57 @@ def generate_scripts_endpoint() -> dict:
     if not tests:
         raise HTTPException(status_code=404, detail="No test cases found in output file.")
 
-    logger.info(f"[SCRIPT] Generating Playwright scripts for {len(tests)} test case(s)")
+    logger.info(f"[SCRIPT][{sess['username']}] Generating scripts for {len(tests)} test case(s)")
+    llm = MistralLLM(selected_llm["provider"], selected_llm["model"])
+    scripts_dir.mkdir(parents=True, exist_ok=True)
 
-    llm = MistralLLM(_selected_llm["provider"], _selected_llm["model"])
-    SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    # ── Group tests by requirement_id so related cases share one describe() ──
     groups: dict[str, list] = {}
     for t in tests:
         req_id = t.get("requirement_id") or "UNGROUPED"
         groups.setdefault(req_id, []).append(t)
 
-    count = 0
+    count  = 0
     errors: list[str] = []
     for group_idx, (req_id, group_tests) in enumerate(groups.items()):
         try:
-            safe_req = re.sub(r"[^\w\s-]", "", req_id).strip().replace(" ", "_")[:40]
-            # Derive a human-readable describe label from the first test name in the group
-            first_name = group_tests[0]["test_name"]
+            safe_req    = re.sub(r"[^\w\s-]", "", req_id).strip().replace(" ", "_")[:40]
+            first_name  = group_tests[0]["test_name"]
             group_label = re.sub(r"^[\d_]+", "", first_name).strip().replace("_", " ")
-            # Trim to a concise feature label (≤ 60 chars)
             group_label = re.sub(r"\s+", " ", group_label)[:60].strip() + " Tests"
-
             if len(group_tests) == 1:
-                # Single test — still generate with multi-block prompt via generate_playwright_script
                 script = generate_playwright_script(group_tests[0], llm)
             else:
-                # Multiple tests for same requirement — merge into one describe file
                 script = generate_grouped_script(group_label, group_tests, llm)
-
             filename = f"{group_idx + 1:03d}_{safe_req}.spec.js"
-            (SCRIPTS_DIR / filename).write_text(script, encoding="utf-8")
+            (scripts_dir / filename).write_text(script, encoding="utf-8")
             count += 1
-            logger.info(f"[SCRIPT] Generated: {filename} ({len(group_tests)} test(s))")
+            logger.info(f"[SCRIPT][{sess['username']}] Generated: {filename}")
         except Exception as exc:  # noqa: BLE001
             failed_names = [t["test_name"] for t in group_tests]
             errors.extend(failed_names)
-            logger.error(f"[SCRIPT ERROR] group={req_id}: {exc}", exc_info=True)
+            logger.error(f"[SCRIPT ERROR][{sess['username']}] group={req_id}: {exc}", exc_info=True)
 
     return {"message": f"{count} script(s) generated", "count": count, "errors": errors}
 
 
 @app.get("/download-scripts")
-def download_scripts_endpoint() -> FileResponse:
-    """Zip all generated Playwright scripts and return the archive."""
-    scripts = sorted(SCRIPTS_DIR.glob("*.spec.js")) if SCRIPTS_DIR.exists() else []
+def download_scripts_endpoint(request: Request) -> FileResponse:
+    """Zip all per-session Playwright scripts and return the archive."""
+    _, sess = get_current_session(request)
+    scripts_dir = sess["scripts_dir"]
+    scripts = sorted(scripts_dir.glob("*.spec.js")) if scripts_dir.exists() else []
     if not scripts:
         raise HTTPException(
             status_code=404,
             detail="No scripts found. Click 'Generate Playwright Scripts' first.",
         )
 
-    zip_path = ROOT / "data" / "playwright_scripts.zip"
+    zip_path = sess["output_file"].parent / "playwright_scripts.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in scripts:
             zf.write(f, f.name)
 
-    return FileResponse(
-        str(zip_path),
-        media_type="application/zip",
-        filename="playwright_scripts.zip",
-    )
+    return FileResponse(str(zip_path), media_type="application/zip", filename="playwright_scripts.zip")
 
 
 def _derive_script_label(script_name: str, script_content: str) -> str:
@@ -392,36 +492,37 @@ def _derive_script_label(script_name: str, script_content: str) -> str:
 
 
 @app.get("/scripts")
-def list_scripts() -> dict:
-    """Return generated Playwright scripts for in-app code viewer."""
-    scripts = sorted(SCRIPTS_DIR.glob("*.spec.js")) if SCRIPTS_DIR.exists() else []
+def list_scripts(request: Request) -> dict:
+    """Return per-session Playwright scripts for the in-app code viewer."""
+    _, sess = get_current_session(request)
+    scripts_dir = sess["scripts_dir"]
+    scripts = sorted(scripts_dir.glob("*.spec.js")) if scripts_dir.exists() else []
     if not scripts:
         return {"scripts": []}
 
     items = []
     for script_path in scripts:
         content = script_path.read_text(encoding="utf-8")
-        items.append(
-            {
-                "name": script_path.name,
-                "label": _derive_script_label(script_path.name, content),
-                "language": "javascript",
-                "content": content,
-                "size": script_path.stat().st_size,
-                "mime": mimetypes.guess_type(script_path.name)[0] or "text/plain",
-            }
-        )
-
+        items.append({
+            "name":     script_path.name,
+            "label":    _derive_script_label(script_path.name, content),
+            "language": "javascript",
+            "content":  content,
+            "size":     script_path.stat().st_size,
+            "mime":     mimetypes.guess_type(script_path.name)[0] or "text/plain",
+        })
     return {"scripts": items}
 
 
 @app.get("/results")
-def get_results() -> dict:
-    if not OUTPUT_FILE.exists():
+def get_results(request: Request) -> dict:
+    _, sess = get_current_session(request)
+    output_file = sess["output_file"]
+    if not output_file.exists():
         return {"test_cases": []}
     try:
         import openpyxl  # noqa: PLC0415
-        wb = openpyxl.load_workbook(OUTPUT_FILE)
+        wb = openpyxl.load_workbook(output_file)
         ws = wb.active
         headers = [cell.value for cell in next(ws.iter_rows(max_row=1))]
         rows = [
@@ -434,14 +535,16 @@ def get_results() -> dict:
 
 
 @app.get("/download")
-def download_excel() -> FileResponse:
-    if not OUTPUT_FILE.exists():
+def download_excel(request: Request) -> FileResponse:
+    _, sess = get_current_session(request)
+    output_file = sess["output_file"]
+    if not output_file.exists():
         raise HTTPException(
             status_code=404,
             detail="No output file found. Run the pipeline first.",
         )
     return FileResponse(
-        str(OUTPUT_FILE),
+        str(output_file),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename="generated_tests.xlsx",
     )

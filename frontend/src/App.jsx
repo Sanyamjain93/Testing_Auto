@@ -5,6 +5,7 @@ import TestSummary from './components/TestSummary'
 import LogStream from './components/LogStream'
 import ResultsTable from './components/ResultsTable'
 import ScriptViewer from './components/ScriptViewer'
+import Login from './components/Login'
 import styles from './App.module.css'
 
 const PHASE = {
@@ -25,6 +26,48 @@ const LLM_OPTIONS = [
 const DEFAULT_LLM = LLM_OPTIONS[3]  // Groq llama-4-scout
 
 export default function App() {
+  // ── Auth state ──────────────────────────────────────────────────────────
+  const [isAuthenticated, setIsAuthenticated] = useState(null) // null=checking, false=login, true=authed
+  const [currentUser, setCurrentUser] = useState('')
+
+  // Check existing session on mount
+  useEffect(() => {
+    fetch('/me', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.authenticated) {
+          setCurrentUser(data.username)
+          setIsAuthenticated(true)
+        } else {
+          setIsAuthenticated(false)
+        }
+      })
+      .catch(() => setIsAuthenticated(false))
+  }, [])
+
+  const handleLogin = (username) => {
+    setCurrentUser(username)
+    setIsAuthenticated(true)
+  }
+
+  const handleLogout = async () => {
+    try { await fetch('/logout', { method: 'POST', credentials: 'include' }) } catch (_) {}
+    setIsAuthenticated(false)
+    setCurrentUser('')
+    setFiles([])
+    setPhase(PHASE.IDLE)
+    setLogs([])
+    setResults([])
+    setErrorMsg('')
+    setUploadedNames([])
+    setScriptStatus('')
+    setScripts([])
+    setProgress({ currentStage: null, currentStatus: null })
+    setActiveTab('progress')
+    if (esRef.current) { esRef.current.close(); esRef.current = null }
+  }
+
+  // ── Pipeline state ───────────────────────────────────────────────────────
   const [files, setFiles] = useState([])
   const [phase, setPhase] = useState(PHASE.IDLE)
   const [logs, setLogs] = useState([])
@@ -42,9 +85,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('progress') // 'progress' | 'results' | 'scripts' | 'logs'
   const esRef = useRef(null)
 
-  // Poll status on mount (resume if pipeline was already running)
+  // Poll status on mount — only when authenticated
   useEffect(() => {
-    fetch('/status')
+    if (!isAuthenticated) return
+    fetch('/status', { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         if (data.running) {
@@ -56,7 +100,7 @@ export default function App() {
         }
       })
       .catch(() => {}) // backend not up yet – ignore
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const openStream = useCallback(() => {
     if (esRef.current) esRef.current.close()
@@ -91,7 +135,7 @@ export default function App() {
   }, [])
 
   const loadResults = useCallback(() => {
-    fetch('/results')
+    fetch('/results', { credentials: 'include' })
       .then(r => r.json())
       .then(data => setResults(data.test_cases || []))
       .catch(() => setErrorMsg('Failed to load results.'))
@@ -101,7 +145,7 @@ export default function App() {
     setScriptsLoading(true)
     setScriptsError('')
     try {
-      const res = await fetch('/scripts')
+      const res = await fetch('/scripts', { credentials: 'include' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Failed to load scripts')
       const list = data.scripts || []
@@ -131,7 +175,7 @@ export default function App() {
 
     let uploadRes
     try {
-      const res = await fetch('/upload', { method: 'POST', body: form })
+      const res = await fetch('/upload', { method: 'POST', body: form, credentials: 'include' })
       if (!res.ok) {
         const err = await res.json()
         throw new Error(err.detail || 'Upload failed')
@@ -146,7 +190,7 @@ export default function App() {
 
     // ── Run pipeline ────────────────────────────────────────────────────────
     try {
-      const res = await fetch('/run', { method: 'POST' })
+      const res = await fetch('/run', { method: 'POST', credentials: 'include' })
       if (!res.ok) throw new Error('Failed to start pipeline')
     } catch (e) {
       setErrorMsg(e.message)
@@ -169,7 +213,7 @@ export default function App() {
     setScriptStatus('')
     setScripts([])
     // Tell backend to clear its done-state so old results don't reload on remount
-    try { await fetch('/reset', { method: 'POST' }) } catch (_) {}
+    try { await fetch('/reset', { method: 'POST', credentials: 'include' }) } catch (_) {}
     setScriptsLoading(false)
     setScriptsError('')
     setSelectedScriptName('')
@@ -180,7 +224,7 @@ export default function App() {
   const handleRefreshRag = useCallback(async () => {
     setRagStatus('refreshing')
     try {
-      const res = await fetch('/rag-index', { method: 'DELETE' })
+      const res = await fetch('/rag-index', { method: 'DELETE', credentials: 'include' })
       if (!res.ok) {
         const err = await res.json()
         throw new Error(err.detail || 'Failed to clear RAG index')
@@ -200,6 +244,7 @@ export default function App() {
       await fetch('/set-llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ provider: opt.provider, model: opt.model }),
       })
     } catch (_) {}
@@ -215,7 +260,7 @@ export default function App() {
     setActiveTab('scripts')
     setProgress({ currentStage: 'generating_scripts', currentStatus: 'running' })
     try {
-      const res = await fetch('/generate-scripts', { method: 'POST' })
+      const res = await fetch('/generate-scripts', { method: 'POST', credentials: 'include' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Script generation failed')
       setLogs(prev => [...prev, `[SCRIPT] ${data.count} Playwright script(s) generated ✅`])
@@ -243,6 +288,18 @@ export default function App() {
   const isRunning = phase === PHASE.RUNNING || phase === PHASE.UPLOADING
   const canRun = files.length > 0 && !isRunning
 
+  // Auth gates
+  if (isAuthenticated === null) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#0f1117', color: '#8892a4', fontSize: '1rem' }}>
+        Checking session…
+      </div>
+    )
+  }
+  if (isAuthenticated === false) {
+    return <Login onLogin={handleLogin} />
+  }
+
   return (
     <div className={styles.layout}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
@@ -253,7 +310,18 @@ export default function App() {
             <h1 className={styles.headerTitle}>AI Test Automation Platform</h1>
             <p className={styles.headerSubtitle}>Powered by AI + RAG</p>
           </div>
-          <StatusBadge phase={phase} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <StatusBadge phase={phase} />
+            <span style={{ color: 'var(--text-muted, #8892a4)', fontSize: '0.85rem' }}>
+              👤 {currentUser}
+            </span>
+            <button
+              onClick={handleLogout}
+              style={{ padding: '0.35rem 0.85rem', background: 'transparent', border: '1px solid var(--border, #2d3142)', borderRadius: '6px', color: 'var(--text-secondary, #c8cdd8)', fontSize: '0.8rem', cursor: 'pointer' }}
+            >
+              Sign Out
+            </button>
+          </div>
         </div>
       </header>
 

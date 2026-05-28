@@ -89,27 +89,35 @@ def _clean_llm_json(raw: str) -> str:
     return "".join(result)
 
 
-def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-instruct", emit_progress=None):
+def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-instruct", emit_progress=None,
+        input_dir: str | None = None, output_file: str | None = None,
+        faiss_index_file: str | None = None, rag_metadata_file: str | None = None):
+    # Per-call overrides fall back to the global config defaults
+    _input_dir    = input_dir        or INPUT_DIR
+    _output_file  = output_file      or OUTPUT_FILE
+    _faiss_index  = faiss_index_file or FAISS_INDEX_FILE
+    _rag_metadata = rag_metadata_file or RAG_METADATA_FILE
+
     def emit(stage: str, status: str) -> None:
         """Emit progress event if callback is provided."""
         if emit_progress:
             emit_progress(stage, status)
 
     emit("loading_documents", "running")
-    print(f"📂 Loading documents from: {INPUT_DIR}")
-    logger.info(f"[PIPELINE] run() started — loading from {INPUT_DIR}")
-    if not Path(INPUT_DIR).exists():
-        logger.warning(f"Input directory not found: {INPUT_DIR}")
-        print(f"⚠️  Input directory not found: {INPUT_DIR}")
+    print(f"📂 Loading documents from: {_input_dir}")
+    logger.info(f"[PIPELINE] run() started — loading from {_input_dir}")
+    if not Path(_input_dir).exists():
+        logger.warning(f"Input directory not found: {_input_dir}")
+        print(f"⚠️  Input directory not found: {_input_dir}")
         return
 
     all_chunks = []
-    for f in sorted(Path(INPUT_DIR).rglob("*")):
+    for f in sorted(Path(_input_dir).rglob("*")):
         if not f.is_file() or f.suffix.lower() not in _SUPPORTED_EXTS:
             continue
         raw_text = load_document(f)
-        module = _module_from_path(f, INPUT_DIR) or detect_module(raw_text[:500])
-        logger.debug(f"Loading [{module}]: {f.relative_to(INPUT_DIR)}")
+        module = _module_from_path(f, _input_dir) or detect_module(raw_text[:500])
+        logger.debug(f"Loading [{module}]: {f.relative_to(_input_dir)}")
         file_chunks = chunk_requirements(raw_text, CHUNK_SIZE, CHUNK_OVERLAP)
         for c in file_chunks:
             c["module"] = module
@@ -136,9 +144,9 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
 
     # ── Load existing FAISS index or build a new one ───────────────────────
     emit("rag_retrieval", "running")
-    if Path(FAISS_INDEX_FILE).exists() and Path(RAG_METADATA_FILE).exists():
+    if Path(_faiss_index).exists() and Path(_rag_metadata).exists():
         print("🗄️  Loading existing FAISS index from disk...")
-        store = VectorStore.load(FAISS_INDEX_FILE, RAG_METADATA_FILE)
+        store = VectorStore.load(_faiss_index, _rag_metadata)
         print(f"✅ Loaded FAISS index ({store.index.ntotal} vectors) and metadata ({len(store.metadata)} entries)\n")
         logger.info(f"[PIPELINE] FAISS index loaded from disk: {store.index.ntotal} vectors, {len(store.metadata)} metadata entries")
     else:
@@ -154,7 +162,7 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
             for i, c in enumerate(all_chunks)
         ]
         store.add(vectors, chunk_metadata)
-        store.save(FAISS_INDEX_FILE, RAG_METADATA_FILE)
+        store.save(_faiss_index, _rag_metadata)
         print(f"✅ FAISS index built and saved ({store.index.ntotal} vectors)\n")
         logger.info(f"[PIPELINE] FAISS index built and saved: {store.index.ntotal} vectors")
 
@@ -296,7 +304,7 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
         print("\n   ✅ All requirements have at least one test case.")
     print("─" * 50)
 
-    print(f"\n📊 Writing {len(test_cases)} test cases to: {OUTPUT_FILE}")
+    print(f"\n📊 Writing {len(test_cases)} test cases to: {_output_file}")
 
     # Renumber all test cases sequentially (001_, 002_, ...) across the full output.
     # The LLM restarts numbering from 001 for each chunk, so we fix it here.
@@ -309,7 +317,7 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
         tc["test_name"] = prefix + clean_name
         tc["test_description"] = clean_desc
 
-    write_excel(test_cases, OUTPUT_FILE)
-    print(f"✅ Done! Output saved to: {OUTPUT_FILE}")
-    logger.info(f"[PIPELINE] Pipeline complete. {len(test_cases)} test cases saved to {OUTPUT_FILE}")
+    write_excel(test_cases, _output_file)
+    print(f"✅ Done! Output saved to: {_output_file}")
+    logger.info(f"[PIPELINE] Pipeline complete. {len(test_cases)} test cases saved to {_output_file}")
     emit("generating_tests", "done")
