@@ -312,12 +312,12 @@ export default function App() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <StatusBadge phase={phase} />
-            <span style={{ color: 'var(--text-muted, #8892a4)', fontSize: '0.85rem' }}>
+            <span style={{ color: 'white', fontSize: '0.85rem', fontWeight: 500 }}>
               👤 {currentUser}
             </span>
             <button
               onClick={handleLogout}
-              style={{ padding: '0.35rem 0.85rem', background: 'transparent', border: '1px solid var(--border, #2d3142)', borderRadius: '6px', color: 'var(--text-secondary, #c8cdd8)', fontSize: '0.8rem', cursor: 'pointer' }}
+              style={{ padding: '0.35rem 0.85rem', background: 'transparent', border: '1px solid rgba(255,255,255,0.6)', borderRadius: '6px', color: 'white', fontSize: '0.8rem', cursor: 'pointer', fontWeight: 500 }}
             >
               Sign Out
             </button>
