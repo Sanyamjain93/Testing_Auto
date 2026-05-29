@@ -156,6 +156,9 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
     logger.info(f"[PIPELINE] {len(all_chunks)} requirement {unit_label} loaded | input_type={input_type}")
     emit("loading_documents", "done")
 
+    # Build a lookup for Excel-format output (req_id → raw source chunk)
+    chunks_by_req_id: dict = {c["requirement_id"]: c for c in all_chunks}
+
     # Extract plain texts for embedding
     chunk_texts = [c["requirement_text"] for c in all_chunks]
 
@@ -348,7 +351,12 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
         tc["test_name"] = prefix + clean_name
         tc["test_description"] = clean_desc
 
-    write_excel(test_cases, _output_file)
+    write_excel(
+        test_cases,
+        _output_file,
+        input_type=input_type,
+        chunks_by_req_id=chunks_by_req_id,
+    )
     print(f"✅ Done! Output saved to: {_output_file}")
     logger.info(f"[PIPELINE] Pipeline complete. {len(test_cases)} test cases saved to {_output_file}")
     emit("generating_tests", "done")
