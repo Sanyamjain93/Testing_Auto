@@ -17,6 +17,7 @@ import sys
 import threading
 import uuid
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -93,6 +94,7 @@ def _create_session(username: str) -> tuple[str, dict]:
         "log_q":    queue.Queue(),
         "progress_q": queue.Queue(),
         "selected_llm": LLM_OPTIONS[3].copy(),
+        "last_active":       datetime.now(),
         "input_dir":         sess_dir / "input",
         "output_file":       sess_dir / "output.xlsx",
         "scripts_dir":       sess_dir / "scripts",
@@ -101,12 +103,46 @@ def _create_session(username: str) -> tuple[str, dict]:
     }
 
 
+IDLE_TIMEOUT = timedelta(hours=1)
+
+
 def get_current_session(request: Request) -> tuple[str, dict]:
-    """Validate session cookie. Raises HTTP 401 if missing or unknown."""
+    """Validate session cookie. Raises HTTP 401 if missing, unknown, or idle > 1 hour."""
     sid = request.cookies.get("session_id")
     if not sid or sid not in user_sessions:
         raise HTTPException(status_code=401, detail="Not authenticated. Please log in.")
-    return sid, user_sessions[sid]
+    sess = user_sessions[sid]
+    if datetime.now() - sess["last_active"] > IDLE_TIMEOUT:
+        # Clean up expired session
+        sess_dir = _session_dir(sid)
+        user_sessions.pop(sid, None)
+        if sess_dir.exists():
+            shutil.rmtree(sess_dir, ignore_errors=True)
+        logger.info(f"[AUTH] Session '{sid[:8]}…' expired due to inactivity")
+        raise HTTPException(status_code=401, detail="Session expired due to inactivity. Please log in again.")
+    sess["last_active"] = datetime.now()
+    return sid, sess
+
+
+def _session_cleanup_worker() -> None:
+    """Background thread: evict sessions idle for more than IDLE_TIMEOUT."""
+    while True:
+        threading.Event().wait(300)  # check every 5 minutes
+        now = datetime.now()
+        expired = [
+            sid for sid, s in list(user_sessions.items())
+            if now - s["last_active"] > IDLE_TIMEOUT
+        ]
+        for sid in expired:
+            sess = user_sessions.pop(sid, None)
+            if sess:
+                sess_dir = _session_dir(sid)
+                if sess_dir.exists():
+                    shutil.rmtree(sess_dir, ignore_errors=True)
+                logger.info(f"[CLEANUP] Evicted idle session for '{sess['username']}' (sid={sid[:8]}…)")
+
+
+threading.Thread(target=_session_cleanup_worker, daemon=True).start()
 
 
 # ── Pydantic models ────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import styles from './Login.module.css'
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, expiredMsg }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -37,6 +37,7 @@ export default function Login({ onLogin }) {
           <p className={styles.subtitle}>Sign in to continue</p>
         </div>
         <form className={styles.form} onSubmit={handleSubmit}>
+          {expiredMsg && <div className={styles.expired}>{expiredMsg}</div>}
           <div className={styles.field}>
             <label className={styles.label} htmlFor="username">Username</label>
             <input

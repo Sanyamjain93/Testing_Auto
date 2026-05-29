@@ -29,6 +29,7 @@ export default function App() {
   // ── Auth state ──────────────────────────────────────────────────────────
   const [isAuthenticated, setIsAuthenticated] = useState(null) // null=checking, false=login, true=authed
   const [currentUser, setCurrentUser] = useState('')
+  const [expiredMsg, setExpiredMsg] = useState('')
 
   // Check existing session on mount
   useEffect(() => {
@@ -47,8 +48,27 @@ export default function App() {
 
   const handleLogin = (username) => {
     setCurrentUser(username)
+    setExpiredMsg('')
     setIsAuthenticated(true)
   }
+
+  // Called on 401 from any API call (idle timeout or invalid session)
+  const handleSessionExpired = useCallback(() => {
+    setIsAuthenticated(false)
+    setCurrentUser('')
+    setExpiredMsg('Your session expired due to inactivity. Please sign in again.')
+    if (esRef.current) { esRef.current.close(); esRef.current = null }
+  }, [])
+
+  // Wrapper around fetch that auto-handles 401 (session expired)
+  const authFetch = useCallback(async (url, opts = {}) => {
+    const res = await fetch(url, { credentials: 'include', ...opts })
+    if (res.status === 401) {
+      handleSessionExpired()
+      throw new Error('session_expired')
+    }
+    return res
+  }, [handleSessionExpired])
 
   const handleLogout = async () => {
     try { await fetch('/logout', { method: 'POST', credentials: 'include' }) } catch (_) {}
@@ -88,7 +108,7 @@ export default function App() {
   // Poll status on mount — only when authenticated
   useEffect(() => {
     if (!isAuthenticated) return
-    fetch('/status', { credentials: 'include' })
+    authFetch('/status')
       .then(r => r.json())
       .then(data => {
         if (data.running) {
@@ -128,36 +148,38 @@ export default function App() {
     }
     es.onerror = () => {
       es.close()
-      // Only flip to error if we are still in running state
+      // Check whether this was a session expiry (401) or a genuine connection drop
+      fetch('/me', { credentials: 'include' })
+        .then(r => { if (r.status === 401) handleSessionExpired() })
+        .catch(() => {})
       setPhase(prev => prev === PHASE.RUNNING ? PHASE.ERROR : prev)
       setErrorMsg(prev => prev || 'Connection to backend lost.')
     }
-  }, [])
+  }, [handleSessionExpired])
 
   const loadResults = useCallback(() => {
-    fetch('/results', { credentials: 'include' })
+    authFetch('/results')
       .then(r => r.json())
       .then(data => setResults(data.test_cases || []))
-      .catch(() => setErrorMsg('Failed to load results.'))
-  }, [])
+      .catch(e => { if (e.message !== 'session_expired') setErrorMsg('Failed to load results.') })
+  }, [authFetch])
 
   const loadScripts = useCallback(async () => {
     setScriptsLoading(true)
     setScriptsError('')
     try {
-      const res = await fetch('/scripts', { credentials: 'include' })
+      const res = await authFetch('/scripts')
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Failed to load scripts')
       const list = data.scripts || []
       setScripts(list)
       setSelectedScriptName(prev => prev || (list[0]?.name || ''))
     } catch (e) {
-      setScripts([])
-      setScriptsError(e.message)
+      if (e.message !== 'session_expired') { setScripts([]); setScriptsError(e.message) }
     } finally {
       setScriptsLoading(false)
     }
-  }, [])
+  }, [authFetch])
 
   const handleUploadAndRun = useCallback(async () => {
     if (files.length === 0) return
@@ -175,13 +197,14 @@ export default function App() {
 
     let uploadRes
     try {
-      const res = await fetch('/upload', { method: 'POST', body: form, credentials: 'include' })
+      const res = await authFetch('/upload', { method: 'POST', body: form })
       if (!res.ok) {
         const err = await res.json()
         throw new Error(err.detail || 'Upload failed')
       }
       uploadRes = await res.json()
     } catch (e) {
+      if (e.message === 'session_expired') return
       setErrorMsg(e.message)
       setPhase(PHASE.ERROR)
       return
@@ -190,9 +213,10 @@ export default function App() {
 
     // ── Run pipeline ────────────────────────────────────────────────────────
     try {
-      const res = await fetch('/run', { method: 'POST', credentials: 'include' })
+      const res = await authFetch('/run', { method: 'POST' })
       if (!res.ok) throw new Error('Failed to start pipeline')
     } catch (e) {
+      if (e.message === 'session_expired') return
       setErrorMsg(e.message)
       setPhase(PHASE.ERROR)
       return
@@ -224,14 +248,15 @@ export default function App() {
   const handleRefreshRag = useCallback(async () => {
     setRagStatus('refreshing')
     try {
-      const res = await fetch('/rag-index', { method: 'DELETE', credentials: 'include' })
+      const res = await authFetch('/rag-index', { method: 'DELETE' })
       if (!res.ok) {
         const err = await res.json()
         throw new Error(err.detail || 'Failed to clear RAG index')
       }
       setRagStatus('done')
     } catch (e) {
-      setRagStatus('error')
+      if (e.message !== 'session_expired') setRagStatus('error')
+      else setRagStatus('')
     }
     setTimeout(() => setRagStatus(''), 3000)
   }, [])
@@ -241,10 +266,9 @@ export default function App() {
     if (!opt) return
     setSelectedLlm(opt)
     try {
-      await fetch('/set-llm', {
+      await authFetch('/set-llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ provider: opt.provider, model: opt.model }),
       })
     } catch (_) {}
@@ -260,7 +284,7 @@ export default function App() {
     setActiveTab('scripts')
     setProgress({ currentStage: 'generating_scripts', currentStatus: 'running' })
     try {
-      const res = await fetch('/generate-scripts', { method: 'POST', credentials: 'include' })
+      const res = await authFetch('/generate-scripts', { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Script generation failed')
       setLogs(prev => [...prev, `[SCRIPT] ${data.count} Playwright script(s) generated ✅`])
@@ -297,7 +321,7 @@ export default function App() {
     )
   }
   if (isAuthenticated === false) {
-    return <Login onLogin={handleLogin} />
+    return <Login onLogin={handleLogin} expiredMsg={expiredMsg} />
   }
 
   return (
