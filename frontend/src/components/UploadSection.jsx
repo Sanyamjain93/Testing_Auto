@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import styles from './UploadSection.module.css'
 
-const ALLOWED = ['.pdf', '.docx', '.txt', '.md']
+const ALLOWED = ['.pdf', '.docx', '.txt', '.md', '.xlsx']
 
 function validateFile(file) {
   const ext = '.' + file.name.split('.').pop().toLowerCase()
