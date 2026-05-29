@@ -22,7 +22,6 @@ logger = get_logger("test_automation.pipeline")
 
 _SUPPORTED_EXTS = {".pdf", ".docx", ".txt", ".md", ".xlsx"}
 
-
 def detect_module(text: str) -> str:
     """Infer the Oracle Retail module from requirement text keywords."""
     t = text.lower()
