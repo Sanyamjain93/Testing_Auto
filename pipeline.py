@@ -22,7 +22,6 @@ logger = get_logger("test_automation.pipeline")
 
 _SUPPORTED_EXTS = {".pdf", ".docx", ".txt", ".md", ".xlsx"}
 
-
 def detect_module(text: str) -> str:
     """Infer the Oracle Retail module from requirement text keywords."""
     t = text.lower()
@@ -55,8 +54,15 @@ def _clean_llm_json(raw: str) -> str:
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw.strip())
 
-    # Extract the outermost JSON object or array
-    for start_char, end_char in (("{" , "}"), ("[", "]")):
+    # Extract the outermost JSON object or array — try whichever starts first
+    first_brace   = raw.find('{')
+    first_bracket = raw.find('[')
+    if first_bracket != -1 and (first_brace == -1 or first_bracket < first_brace):
+        pairs = [('[', ']'), ('{', '}')]
+    else:
+        pairs = [('{', '}'), ('[', ']')]
+
+    for start_char, end_char in pairs:
         start = raw.find(start_char)
         end = raw.rfind(end_char)
         if start != -1 and end != -1 and end > start:
