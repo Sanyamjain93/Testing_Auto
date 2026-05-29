@@ -251,3 +251,66 @@ Relevant context from indexed documents (RAG — same module only):
 - MANDATORY: include at least 1 "positive", 1 "negative", and 1 "edge" test case for every requirement.
 - Every test case MUST contain the "test_type" field set to exactly "positive", "negative", or "edge".
 """
+
+# ── Excel row-based prompt (structured requirements) ──────────────────────────
+EXCEL_PROMPT_TEMPLATE = """
+You are an expert QA engineer.
+
+Your ONLY task is to output a **valid JSON array** with the following schema:
+
+[
+  {{
+    "requirement_id": "string",
+    "requirement_text": "string",
+    "test_name": "string",
+    "test_description": "string",
+    "test_type": "positive" | "negative" | "edge",
+    "steps": [
+      {{
+        "step_name": "string",
+        "action": "string",
+        "expected_result": "string"
+      }}
+    ]
+  }}
+]
+
+===== SCENARIO COVERAGE RULES (MANDATORY) =====
+For EVERY requirement you MUST generate ALL THREE of the following scenario types.
+Minimum output: 3 test cases (one of each type).
+
+1. POSITIVE  – happy path, all inputs valid, expected flow completes.
+2. NEGATIVE  – invalid/missing inputs, constraint violations, error messages verified.
+3. EDGE      – boundary values, extreme inputs, limits, special characters.
+
+===== TRACEABILITY RULES (STRICT) =====
+- requirement_id MUST be copied EXACTLY from the CURRENT REQUIREMENT below.
+- requirement_text MUST be copied EXACTLY as the full CURRENT REQUIREMENT text below.
+
+===== STYLE RULES =====
+1. Test Name: starts with 3-digit prefix e.g. "001_To validate that..."
+2. Test Description: identical to Test Name but WITHOUT the 3-digit prefix.
+3. Step Names: "Step 1", "Step 2", ... restart numbering per test case.
+4. Actions: ONE atomic action per step (no chaining with "and").
+5. Expected Results: direct system response for that single action.
+
+===== ATOMIC STEP BREAKDOWN =====
+Break every multi-action into individual steps. One step = one user action or system check.
+
+===== CURRENT REQUIREMENT =====
+Requirement ID: {requirement_id}
+
+{requirement_text}
+
+===== REFERENCE CONTEXT (similar requirements — use for domain accuracy only) =====
+{context}
+
+===== FINAL INSTRUCTIONS =====
+- Output a valid JSON array only. No markdown, no comments, no trailing commas.
+- Generate at least 1 positive, 1 negative, 1 edge test case.
+- requirement_id in every object MUST equal exactly: {requirement_id}
+- requirement_text in every object MUST be the full CURRENT REQUIREMENT text above.
+- Use preconditions from the requirement to set up each test case appropriately.
+- Follow the business flow described in Test Scenario and Description strictly.
+- Cover validation failures and success paths explicitly.
+"""

@@ -3,11 +3,11 @@ from config.config import (
     CHUNK_SIZE, INPUT_DIR, CHUNK_OVERLAP, EMBEDDING_MODEL, OUTPUT_FILE, TOP_K,
     RAG_FETCH_K, RAG_SIMILARITY_THRESHOLD, FAISS_INDEX_FILE, RAG_METADATA_FILE,
 )
-from ingestion.document_loader import load_document
+from ingestion.document_loader import load_document, load_excel_requirements
 from retrieval.chunker import chunk_requirements
 from retrieval.embedder import Embedder
 from retrieval.vector_store import VectorStore
-from prompts.testcase_prompt import PROMPT_TEMPLATE
+from prompts.testcase_prompt import PROMPT_TEMPLATE, EXCEL_PROMPT_TEMPLATE
 from util.mistral_client import MistralLLM
 from util.excel_writer import write_excel
 from util.scorer import score_all
@@ -112,9 +112,26 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
         return
 
     all_chunks = []
+    input_type = "doc"  # "excel" | "doc"
+
     for f in sorted(Path(_input_dir).rglob("*")):
         if not f.is_file() or f.suffix.lower() not in _SUPPORTED_EXTS:
             continue
+
+        # ── Attempt structured Excel row ingestion first ───────────────────
+        if f.suffix.lower() == ".xlsx":
+            excel_rows = load_excel_requirements(f)
+            if excel_rows is not None:
+                input_type = "excel"
+                module = _module_from_path(f, _input_dir) or "RMS"
+                logger.info(f"[PIPELINE] Excel requirement file detected: {f.name} — {len(excel_rows)} rows")
+                print(f"📊 Excel requirements file: {f.name} ({len(excel_rows)} rows, row-based RAG)")
+                for row in excel_rows:
+                    row["module"] = module
+                all_chunks.extend(excel_rows)
+                continue  # skip legacy text chunking for this file
+
+        # ── Legacy text-based chunking (PDF, DOCX, TXT, MD, plain XLSX) ───
         raw_text = load_document(f)
         module = _module_from_path(f, _input_dir) or detect_module(raw_text[:500])
         logger.debug(f"Loading [{module}]: {f.relative_to(_input_dir)}")
@@ -128,8 +145,9 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
         print("⚠️  No documents found. Exiting.")
         return
 
-    print(f"✅ Documents loaded. {len(all_chunks)} requirement chunks across all files.\n")
-    logger.info(f"[PIPELINE] {len(all_chunks)} requirement chunks loaded from {INPUT_DIR}")
+    unit_label = "rows" if input_type == "excel" else "chunks"
+    print(f"✅ Documents loaded. {len(all_chunks)} requirement {unit_label} across all files.\n")
+    logger.info(f"[PIPELINE] {len(all_chunks)} requirement {unit_label} loaded | input_type={input_type}")
     emit("loading_documents", "done")
 
     # Extract plain texts for embedding
@@ -231,12 +249,19 @@ def run(provider: str = "groq", model: str = "meta-llama/llama-4-scout-17b-16e-i
             )
         context = "\n\n---\n\n".join(context_chunks)
 
-        prompt = PROMPT_TEMPLATE.format(
-            requirement_id=req_id,
-            incoming_req=req_text,
-            context=context,
-            module=detected_module,
-        )
+        if input_type == "excel":
+            prompt = EXCEL_PROMPT_TEMPLATE.format(
+                requirement_id=req_id,
+                requirement_text=req_text,
+                context=context,
+            )
+        else:
+            prompt = PROMPT_TEMPLATE.format(
+                requirement_id=req_id,
+                incoming_req=req_text,
+                context=context,
+                module=detected_module,
+            )
         estimated_tokens = int(len(prompt.split()) * 1.3)
         logger.info(f"[LLM] Req={req_id} | Estimated tokens: {estimated_tokens}")
         logger.debug(f"[LLM INPUT] Req={req_id} | Prompt preview:\n{prompt[:500]}")
