@@ -516,7 +516,7 @@ export default function App() {
                   <div className={styles.emptyState}>
                     <span className={styles.emptyIcon}>🧪</span>
                     <p>Upload documents and click "Generate Test Cases" to start the pipeline.</p>
-                    <p className={styles.emptyHint}>Supported: PDF, DOCX, TXT, MD</p>
+                    <p className={styles.emptyHint}>Supported: PDF, DOCX, TXT, MD, XLSX</p>
                   </div>
                 )}
               </div>

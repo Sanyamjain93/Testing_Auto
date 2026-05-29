@@ -58,7 +58,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_ALLOWED_EXT = {".pdf", ".docx", ".txt", ".md"}
+_ALLOWED_EXT = {".pdf", ".docx", ".txt", ".md", ".xlsx"}
 
 # ── User authentication ────────────────────────────────────────────────────────
 def _load_users() -> pd.DataFrame:

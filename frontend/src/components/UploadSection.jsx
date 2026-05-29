@@ -71,7 +71,7 @@ export default function UploadSection({ files, setFiles, disabled }) {
         <input
           type="file"
           multiple
-          accept=".pdf,.docx,.txt,.md"
+          accept=".pdf,.docx,.txt,.md,.xlsx"
           className={styles.hiddenInput}
           onChange={onInputChange}
           disabled={disabled}
@@ -81,7 +81,7 @@ export default function UploadSection({ files, setFiles, disabled }) {
           {dragging ? 'Drop files here' : 'Drag & drop files'}
         </span>
         <span className={styles.dropSub}>
-          or <span className={styles.browseLink}>browse</span> · PDF, DOCX, TXT, MD
+          or <span className={styles.browseLink}>browse</span> · PDF, DOCX, TXT, MD, XLSX
         </span>
       </label>
 
