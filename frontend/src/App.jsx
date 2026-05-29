@@ -386,6 +386,8 @@ export default function App() {
 
           <div className={styles.panelSection}>
             <h3 className={styles.sectionTitle}>🚀 Actions</h3>
+
+            {/* 1. Generate Test Cases */}
             <button
               className={styles.primaryBtn}
               onClick={handleUploadAndRun}
@@ -400,6 +402,36 @@ export default function App() {
               )}
             </button>
 
+            {/* 2. Generate Scripts */}
+            <button
+              className={styles.primaryBtn}
+              onClick={handleGenerateScripts}
+              disabled={isRunning || phase !== PHASE.DONE || results.length === 0 || scriptStatus === 'generating'}
+            >
+              {scriptStatus === 'generating'
+                ? <><Spinner /> Generating…</>
+                : '⚡ Generate Scripts'}
+            </button>
+
+            {/* 3. Download Excel */}
+            <button
+              className={styles.primaryBtn}
+              onClick={handleDownload}
+              disabled={phase !== PHASE.DONE || results.length === 0}
+            >
+              ⬇ Download Excel
+            </button>
+
+            {/* 4. Download Scripts */}
+            <button
+              className={styles.primaryBtn}
+              onClick={handleDownloadScripts}
+              disabled={scriptStatus !== 'done'}
+            >
+              ⬇ Download Scripts
+            </button>
+
+            {/* 5. Refresh RAG */}
             <button
               className={styles.secondaryBtn}
               onClick={handleRefreshRag}
@@ -407,38 +439,19 @@ export default function App() {
               title="Clear FAISS index and rebuild on next run"
             >
               {ragStatus === 'refreshing' ? <><Spinner /> Clearing…</> :
-               ragStatus === 'done'       ? '✅ Cleared' :
-               ragStatus === 'error'      ? '❌ Failed' :
+               ragStatus === 'done'       ? '✅ RAG Cleared' :
+               ragStatus === 'error'      ? '❌ Clear Failed' :
                '🔄 Refresh RAG'}
             </button>
 
-            {(phase === PHASE.DONE || phase === PHASE.ERROR) && (
-              <button className={styles.secondaryBtn} onClick={handleReset}>
-                ↺ Reset
-              </button>
-            )}
-
-            {phase === PHASE.DONE && results.length > 0 && (
-              <>
-                <button className={styles.primaryBtn} onClick={handleDownload}>
-                  ⬇ Download Excel
-                </button>
-                <button
-                  className={styles.primaryBtn}
-                  onClick={handleGenerateScripts}
-                  disabled={scriptStatus === 'generating'}
-                >
-                  {scriptStatus === 'generating'
-                    ? <><Spinner /> Generating…</>
-                    : '⚡ Generate Scripts'}
-                </button>
-                {scriptStatus === 'done' && (
-                  <button className={styles.primaryBtn} onClick={handleDownloadScripts}>
-                    ⬇ Download Scripts
-                  </button>
-                )}
-              </>
-            )}
+            {/* 6. Reset */}
+            <button
+              className={styles.secondaryBtn}
+              onClick={handleReset}
+              disabled={isRunning || (phase === PHASE.IDLE && logs.length === 0)}
+            >
+              ↺ Reset
+            </button>
           </div>
 
           {phase === PHASE.ERROR && (
